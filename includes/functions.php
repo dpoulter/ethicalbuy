@@ -272,6 +272,106 @@ function rating_score($rating)
 }
 
 /**
+ * True if this request arrived over TLS.
+ *
+ * X-Forwarded-Proto is only believed when TRUST_PROXY=1, because any client
+ * can send that header when the app is reachable directly.
+ */
+function is_secure_request()
+{
+    if (!empty($_SERVER["HTTPS"]) && strtolower($_SERVER["HTTPS"]) !== "off")
+    {
+        return true;
+    }
+
+    if (env("TRUST_PROXY", "0") === "1"
+        && strtolower($_SERVER["HTTP_X_FORWARDED_PROTO"] ?? "") === "https")
+    {
+        return true;
+    }
+
+    // local development over plain HTTP
+    return in_array($_SERVER["REMOTE_ADDR"] ?? "", ["127.0.0.1", "::1"], true);
+}
+
+/**
+ * Reads the submitted Basic credentials as [user, password], or [null, null].
+ *
+ * Falls back to parsing the Authorization header, because under CGI/FastCGI
+ * PHP_AUTH_USER is only populated if the web server forwards it.
+ */
+function basic_auth_credentials()
+{
+    if (isset($_SERVER["PHP_AUTH_USER"]))
+    {
+        return [$_SERVER["PHP_AUTH_USER"], $_SERVER["PHP_AUTH_PW"] ?? ""];
+    }
+
+    $header = $_SERVER["HTTP_AUTHORIZATION"]
+        ?? $_SERVER["REDIRECT_HTTP_AUTHORIZATION"]
+        ?? "";
+
+    if (stripos($header, "Basic ") !== 0)
+    {
+        return [null, null];
+    }
+
+    $decoded = base64_decode(substr($header, 6), true);
+    if ($decoded === false || strpos($decoded, ":") === false)
+    {
+        return [null, null];
+    }
+
+    return explode(":", $decoded, 2);
+}
+
+/**
+ * Gate for every admin page. Sends 401 and exits unless valid credentials
+ * were supplied. Fails closed: if the app is misconfigured, nobody gets in.
+ *
+ * Credentials come from ADMIN_USER and ADMIN_PASSWORD_HASH, the latter being
+ * a password_hash() digest so no plaintext password is ever stored.
+ */
+function require_admin()
+{
+    // Basic credentials travel base64-encoded, which is not encryption
+    if (!is_secure_request())
+    {
+        error_log("Refused admin access over plain HTTP");
+        http_response_code(403);
+        exit("Admin is only available over HTTPS.");
+    }
+
+    $user = env("ADMIN_USER", "");
+    $hash = env("ADMIN_PASSWORD_HASH", "");
+
+    if ($user === "" || $hash === "")
+    {
+        error_log("Admin is not configured: set ADMIN_USER and ADMIN_PASSWORD_HASH");
+        http_response_code(500);
+        exit("Admin is not configured.");
+    }
+
+    [$given_user, $given_pass] = basic_auth_credentials();
+
+    $ok = is_string($given_user)
+        && hash_equals($user, $given_user)
+        && password_verify((string) $given_pass, $hash);
+
+    if (!$ok)
+    {
+        if ($given_user !== null)
+        {
+            error_log("Failed admin login for user: " . $given_user);
+        }
+
+        header('WWW-Authenticate: Basic realm="Ethical Buy admin", charset="UTF-8"');
+        http_response_code(401);
+        exit("Authentication required.");
+    }
+}
+
+/**
  * Reads a string from $_GET/$_POST, defending against array-valued input
  * such as ?field[]=x, which would otherwise raise a conversion notice.
  */
@@ -499,6 +599,213 @@ function save_contact_message($name, $email, $message)
     );
 
     return $result !== false;
+}
+
+/* ------------------------------------------------------------------ *
+ * Admin
+ *
+ * The public site reads brand_v, which is a view and therefore not
+ * reliably writable. Everything below targets the base tables instead:
+ * brands, categories and owners. If your production schema differs,
+ * these are the only functions that need to change.
+ * ------------------------------------------------------------------ */
+
+/**
+ * Every category, for the admin dropdown. Returns id/name rows.
+ */
+function get_all_categories()
+{
+    $rows = query("SELECT id, name FROM categories ORDER BY name");
+
+    return $rows === false ? [] : $rows;
+}
+
+/**
+ * Every owner, for the admin dropdown. Returns id/name rows.
+ */
+function get_all_owners()
+{
+    $rows = query("SELECT id, name FROM owners ORDER BY name");
+
+    return $rows === false ? [] : $rows;
+}
+
+/**
+ * Brands for the admin list, optionally filtered by name.
+ * Returns rows, or false on error.
+ */
+function admin_list_brands($search = "")
+{
+    $sql = "SELECT b.id, b.name, b.type, b.availability, b.rating, b.updated_at,
+                   c.name AS category, o.name AS owner
+              FROM brands b
+              LEFT JOIN categories c ON c.id = b.category_id
+              LEFT JOIN owners     o ON o.id = b.owner_id";
+
+    $params = [];
+    $search = trim($search);
+    if ($search !== "")
+    {
+        $sql .= " WHERE UPPER(b.name) LIKE UPPER(?)";
+        $params[] = "%" . like_escape($search) . "%";
+    }
+
+    $sql .= " ORDER BY b.name";
+
+    return query($sql, ...$params);
+}
+
+/**
+ * A single brand by id. Returns a row, null if not found, false on error.
+ */
+function admin_get_brand($id)
+{
+    $rows = query(
+        "SELECT id, name, category_id, owner_id, type, notes, availability, rating
+           FROM brands
+          WHERE id = ?",
+        $id
+    );
+
+    if ($rows === false)
+    {
+        return false;
+    }
+
+    return $rows[0] ?? null;
+}
+
+/**
+ * True if another brand already uses this name.
+ * $exclude_id lets a brand keep its own name while editing.
+ */
+function brand_name_exists($name, $exclude_id = null)
+{
+    $rows = query(
+        "SELECT id FROM brands WHERE name = ? AND (? IS NULL OR id <> ?) LIMIT 1",
+        $name,
+        $exclude_id,
+        $exclude_id
+    );
+
+    return !empty($rows);
+}
+
+/**
+ * Validates submitted brand fields. Returns an array of errors keyed by
+ * field name; empty means valid.
+ */
+function validate_brand($data, $exclude_id = null)
+{
+    $errors = [];
+
+    $name = trim((string) ($data["name"] ?? ""));
+    if ($name === "")
+    {
+        $errors["name"] = "A brand name is required.";
+    }
+    else if (mb_strlen($name) > 150)
+    {
+        $errors["name"] = "Keep the brand name under 150 characters.";
+    }
+    else if (brand_name_exists($name, $exclude_id))
+    {
+        $errors["name"] = "There is already a brand with that name.";
+    }
+
+    $rating = trim((string) ($data["rating"] ?? ""));
+    if ($rating !== "")
+    {
+        if (!is_numeric($rating))
+        {
+            $errors["rating"] = "The rating must be a number between 1 and 10, or left blank.";
+        }
+        else if ((float) $rating < 1 || (float) $rating > 10)
+        {
+            $errors["rating"] = "The rating must be between 1 and 10.";
+        }
+    }
+
+    foreach (["type" => 100, "availability" => 100] as $field => $max)
+    {
+        if (mb_strlen(trim((string) ($data[$field] ?? ""))) > $max)
+        {
+            $errors[$field] = "Keep this under $max characters.";
+        }
+    }
+
+    if (mb_strlen((string) ($data["notes"] ?? "")) > 5000)
+    {
+        $errors["notes"] = "Keep the notes under 5000 characters.";
+    }
+
+    return $errors;
+}
+
+/**
+ * Normalises a submitted form into the columns brands expects.
+ * Empty strings become NULL so the database stores absence, not "".
+ */
+function brand_params($data)
+{
+    $blank_to_null = function ($value) {
+        $value = trim((string) $value);
+        return $value === "" ? null : $value;
+    };
+
+    return [
+        "name"         => trim((string) ($data["name"] ?? "")),
+        "category_id"  => $blank_to_null($data["category_id"] ?? ""),
+        "owner_id"     => $blank_to_null($data["owner_id"] ?? ""),
+        "type"         => $blank_to_null($data["type"] ?? ""),
+        "notes"        => $blank_to_null($data["notes"] ?? ""),
+        "availability" => $blank_to_null($data["availability"] ?? ""),
+        "rating"       => $blank_to_null($data["rating"] ?? ""),
+    ];
+}
+
+/**
+ * Inserts a brand. Returns true on success.
+ */
+function admin_create_brand($data)
+{
+    $p = brand_params($data);
+
+    $result = query(
+        "INSERT INTO brands (name, category_id, owner_id, type, notes, availability, rating)
+              VALUES (?, ?, ?, ?, ?, ?, ?)",
+        $p["name"], $p["category_id"], $p["owner_id"],
+        $p["type"], $p["notes"], $p["availability"], $p["rating"]
+    );
+
+    return $result !== false;
+}
+
+/**
+ * Updates a brand. Returns true on success.
+ */
+function admin_update_brand($id, $data)
+{
+    $p = brand_params($data);
+
+    $result = query(
+        "UPDATE brands
+            SET name = ?, category_id = ?, owner_id = ?, type = ?,
+                notes = ?, availability = ?, rating = ?
+          WHERE id = ?",
+        $p["name"], $p["category_id"], $p["owner_id"], $p["type"],
+        $p["notes"], $p["availability"], $p["rating"], $id
+    );
+
+    return $result !== false;
+}
+
+/**
+ * Deletes a brand. Returns true on success.
+ */
+function admin_delete_brand($id)
+{
+    return query("DELETE FROM brands WHERE id = ?", $id) !== false;
 }
 
 /**

@@ -12,12 +12,15 @@ public/       web root -- the only directory the web server should serve
   brand.php     single brand detail, with alternatives in the same category
   about.php     what the site is and how ratings work
   contact.php   contact form
+  admin/        brand CRUD, behind HTTP Basic auth
   vendor/       vendored front-end libraries
 includes/     configuration and helpers (not web-accessible)
 templates/    page fragments rendered by render() (not web-accessible)
   partials/     small includes shared between templates
+  admin/        admin screens
 migrations/   one-off SQL, applied by hand in filename order
 dev/          local development schema, seed data and setup script
+tests/        smoke.php -- run it before every deploy
 ```
 
 `templates/header.php` opens the HTML document and `templates/footer.php`
@@ -137,6 +140,94 @@ browser, so PHP and JavaScript cannot disagree.
 - `redirect()` sends a relative `Location`, which is valid per RFC 7231 and
   avoids trusting the client-supplied `Host` header. Use it after a successful
   POST so a refresh doesn't resubmit.
+
+## Admin
+
+`/admin` lists every brand and lets you create, edit and delete them. Writes go
+to the `brands` base table, not to `brand_v`, because a multi-table view is not
+reliably writable.
+
+### Enabling it
+
+```sh
+php dev/admin-password.php 'a long admin password'
+# ADMIN_PASSWORD_HASH='$2y$12$...'
+```
+
+Put that hash and a username in the environment:
+
+```
+ADMIN_USER=yourname
+ADMIN_PASSWORD_HASH='$2y$12$...'
+```
+
+Only the hash is ever stored. If either variable is missing, `/admin` returns
+500 and stays shut — it fails closed, so a misconfigured deploy locks the admin
+area rather than opening it.
+
+### What it enforces
+
+- **HTTPS.** Basic credentials are base64, not encrypted, so `require_admin()`
+  refuses to run over plain HTTP. `localhost` is exempt for development.
+  `X-Forwarded-Proto` is only believed when `TRUST_PROXY=1`, since any client
+  can forge that header against a directly reachable app.
+- **CSRF on every write.** Create, edit and delete all require a valid token.
+- **Deletes are POST-only.** A GET to `delete.php` shows a confirmation page
+  and changes nothing, so no link or crawler can destroy data.
+- **An audit trail.** Every create, edit and delete is recorded in
+  `message_log`.
+
+### If the login prompt loops under PHP-FPM or CGI
+
+`PHP_AUTH_USER` is only populated automatically under mod_php. Everywhere else
+the web server must forward the header. The code already falls back to reading
+`Authorization` itself, but the server has to pass it through:
+
+```apache
+# Apache 2.4.13+
+CGIPassAuth On
+# older Apache
+SetEnvIf Authorization "(.*)" HTTP_AUTHORIZATION=$1
+```
+
+nginx passes it via the standard `fastcgi_params` (`HTTP_AUTHORIZATION`); if
+you have a trimmed config, add it back.
+
+### Optional second layer
+
+The PHP gate travels with the code and works on any host. If you want
+belt-and-braces, add web-server auth in front of it as well:
+
+```apache
+<Directory /var/www/ethicalbuy/public/admin>
+    AuthType Basic
+    AuthName "Ethical Buy admin"
+    AuthUserFile /etc/apache2/ethicalbuy.htpasswd
+    Require valid-user
+</Directory>
+```
+
+```nginx
+location /admin/ {
+    auth_basic "Ethical Buy admin";
+    auth_basic_user_file /etc/nginx/ethicalbuy.htpasswd;
+}
+```
+
+Basic auth has no lockout or rate limiting. If `/admin` is internet-facing,
+put fail2ban or an equivalent on the 401s in your access log.
+
+## Tests
+
+```sh
+php tests/smoke.php
+```
+
+164 assertions covering the helpers, the search builder's whitelisting, admin
+validation, and every template rendered with hostile input (script payloads in
+every field, quotes and apostrophes in names, `</script>` in free text). It
+exits non-zero on failure, so it drops straight into CI. Most of it needs no
+database; the `validate_brand` section uses the local development one.
 
 ## Local development
 

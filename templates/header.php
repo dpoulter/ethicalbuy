@@ -10,17 +10,17 @@
 
 <nav class="navbar navbar-expand-lg navbar-light bg-light">
   <div class="container-fluid">
-    <a class="navbar-brand" href="index.php">Ethical Buy</a>
+    <a class="navbar-brand" href="/index.php">Ethical Buy</a>
     <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarMenu"
       aria-controls="navbarMenu" aria-expanded="false" aria-label="Toggle navigation">
       <span class="navbar-toggler-icon"></span>
     </button>
     <div class="collapse navbar-collapse" id="navbarMenu">
       <div class="navbar-nav ms-auto">
-        <a class="nav-link btn btn-outline-primary me-2" href="index.php">Home</a>
-        <a class="nav-link btn btn-outline-primary me-2" href="search.php">Product Search</a>
-        <a class="nav-link btn btn-outline-primary me-2" href="about.php">About</a>
-        <a class="nav-link btn btn-outline-primary" href="contact.php">Contact</a>
+        <a class="nav-link btn btn-outline-primary me-2" href="/index.php">Home</a>
+        <a class="nav-link btn btn-outline-primary me-2" href="/search.php">Product Search</a>
+        <a class="nav-link btn btn-outline-primary me-2" href="/about.php">About</a>
+        <a class="nav-link btn btn-outline-primary" href="/contact.php">Contact</a>
       </div>
     </div>
   </div>

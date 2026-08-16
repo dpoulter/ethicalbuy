@@ -67,14 +67,22 @@ done
 echo "==> Seeding sample data (invented brands -- never ship this)"
 admin "$DB_NAME" < "$HERE/seed.sql"
 
-# Granted last: the tables have to exist before they can be granted on. The app
-# reads brand_v and writes only to the three log/contact tables.
+# Granted last: the tables have to exist before they can be granted on.
+#
+# The public site only reads brand_v and appends to the log tables. The admin
+# pages additionally read categories/owners and write to brands. Everything
+# else in the schema stays out of reach.
 echo "==> Granting least privilege to '$DB_USER'"
 admin <<SQL
 GRANT SELECT ON \`$DB_NAME\`.brand_v          TO '$DB_USER'@'localhost';
 GRANT INSERT ON \`$DB_NAME\`.contact_messages TO '$DB_USER'@'localhost';
 GRANT INSERT ON \`$DB_NAME\`.message_log      TO '$DB_USER'@'localhost';
 GRANT INSERT ON \`$DB_NAME\`.jobs             TO '$DB_USER'@'localhost';
+
+-- admin CRUD
+GRANT SELECT                         ON \`$DB_NAME\`.categories TO '$DB_USER'@'localhost';
+GRANT SELECT                         ON \`$DB_NAME\`.owners     TO '$DB_USER'@'localhost';
+GRANT SELECT, INSERT, UPDATE, DELETE ON \`$DB_NAME\`.brands     TO '$DB_USER'@'localhost';
 FLUSH PRIVILEGES;
 SQL
 
