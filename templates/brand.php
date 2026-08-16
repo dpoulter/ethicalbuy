@@ -27,7 +27,30 @@
       <dd class="col-sm-9"><?= e($brand["type"]) ?></dd>
 
       <dt class="col-sm-3">Owner</dt>
-      <dd class="col-sm-9"><?= e($brand["owner"]) ?></dd>
+      <dd class="col-sm-9">
+        <?= e($brand["owner"]) ?>
+        <?php if (!empty($brand["owner_company_number"])): ?>
+          <div class="small text-muted">
+            Registered as <?= e($brand["owner_company_name"]) ?>
+            <?php if (!empty($brand["owner_source_url"])): ?>
+              (<a href="<?= e($brand["owner_source_url"]) ?>" rel="noopener nofollow"
+                  target="_blank">company <?= e($brand["owner_company_number"]) ?></a>)
+            <?php else: ?>
+              (company <?= e($brand["owner_company_number"]) ?>)
+            <?php endif ?>
+          </div>
+        <?php endif ?>
+      </dd>
+
+      <?php if (!empty($brand["owner_parent_name"])): ?>
+        <dt class="col-sm-3">Ultimately controlled by</dt>
+        <dd class="col-sm-9">
+          <?= e($brand["owner_parent_name"]) ?>
+          <div class="small text-muted">
+            From the Companies House register of persons with significant control.
+          </div>
+        </dd>
+      <?php endif ?>
 
       <dt class="col-sm-3">Availability</dt>
       <dd class="col-sm-9"><?= e($brand["availability"]) ?></dd>
@@ -54,6 +77,13 @@
         endif ?><?php if (!empty($brand["retrieved_at"])): ?>,
         retrieved <?= e(substr((string) $brand["retrieved_at"], 0, 10)) ?><?php endif ?>.
         The rating and notes are our own.
+      </p>
+    <?php endif ?>
+
+    <?php if (!empty($brand["owner_company_number"])): ?>
+      <p class="small text-muted mb-0 mt-2">
+        Company information from Companies House. Contains public sector
+        information licensed under the Open Government Licence v3.0.
       </p>
     <?php endif ?>
   </div>

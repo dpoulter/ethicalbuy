@@ -1,6 +1,9 @@
 <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-3">
   <h3 class="mb-0">Admin &middot; Brands</h3>
-  <a class="btn btn-primary" href="/admin/edit.php">Add brand</a>
+  <div>
+    <a class="btn btn-outline-secondary me-2" href="/admin/owners.php">Owners</a>
+    <a class="btn btn-primary" href="/admin/edit.php">Add brand</a>
+  </div>
 </div>
 
 <?php if ($flash !== ""): ?>

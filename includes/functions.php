@@ -432,10 +432,13 @@ function log_job($job_name)
 // columns for lists and search
 define("BRAND_COLUMNS", "brand, category, type, owner, notes, availability, rating");
 
-// the detail page additionally shows certifications and cites its sources.
-// Requires migrations/002_brand_provenance.sql.
+// the detail page additionally shows certifications, the owner's registered
+// identity, and cites its sources.
+// Requires migrations 002_brand_provenance.sql and 003_owner_companies.sql.
 define("BRAND_DETAIL_COLUMNS", BRAND_COLUMNS .
-    ", certifications, source, source_url, source_licence, retrieved_at");
+    ", certifications, source, source_url, source_licence, retrieved_at" .
+    ", owner_company_number, owner_company_name, owner_company_status" .
+    ", owner_parent_name, owner_parent_number, owner_source_url");
 
 const SEARCH_FIELDS = ["brand", "category", "type", "owner"];
 
@@ -811,6 +814,105 @@ function admin_update_brand($id, $data)
 function admin_delete_brand($id)
 {
     return query("DELETE FROM brands WHERE id = ?", $id) !== false;
+}
+
+/**
+ * Owners with their Companies House match state, plus how many candidates
+ * are waiting to be confirmed. Requires migrations/003_owner_companies.sql.
+ */
+function admin_list_owners()
+{
+    $rows = query(
+        "SELECT o.id, o.name, o.company_number, o.company_name, o.company_status,
+                o.parent_company_name, o.match_status, o.match_note, o.source_url,
+                (SELECT COUNT(*) FROM owner_company_candidates c WHERE c.owner_id = o.id)
+                    AS candidate_count,
+                (SELECT COUNT(*) FROM brands b WHERE b.owner_id = o.id) AS brand_count
+           FROM owners o
+          ORDER BY o.match_status = 'confirmed', o.name"
+    );
+
+    return $rows === false ? false : $rows;
+}
+
+/**
+ * Candidate companies suggested for an owner, best first.
+ */
+function admin_owner_candidates($owner_id)
+{
+    $rows = query(
+        "SELECT company_number, company_name, company_status, address_snippet, score
+           FROM owner_company_candidates
+          WHERE owner_id = ?
+          ORDER BY score DESC, company_name",
+        $owner_id
+    );
+
+    return $rows === false ? [] : $rows;
+}
+
+/**
+ * Confirms one of the suggested companies as this owner's registered identity.
+ *
+ * Only ever promotes a candidate we actually fetched, so a forged form field
+ * cannot invent a company number.
+ */
+function admin_confirm_owner_company($owner_id, $company_number)
+{
+    $rows = query(
+        "SELECT company_number, company_name, company_status
+           FROM owner_company_candidates
+          WHERE owner_id = ? AND company_number = ?
+          LIMIT 1",
+        $owner_id, $company_number
+    );
+
+    if (empty($rows))
+    {
+        return false;
+    }
+
+    $c = $rows[0];
+
+    $ok = query(
+        "UPDATE owners
+            SET company_number = ?, company_name = ?, company_status = ?,
+                match_status = 'confirmed', match_note = 'confirmed by hand',
+                source = ?, source_url = ?, source_licence = ?, retrieved_at = NOW()
+          WHERE id = ?",
+        $c["company_number"], $c["company_name"], $c["company_status"],
+        "companieshouse",
+        "https://find-and-update.company-information.service.gov.uk/company/"
+            . rawurlencode($c["company_number"]),
+        "OGL v3.0",
+        $owner_id
+    );
+
+    if ($ok === false)
+    {
+        return false;
+    }
+
+    query("DELETE FROM owner_company_candidates WHERE owner_id = ?", $owner_id);
+
+    return true;
+}
+
+/**
+ * Unlinks an owner from its company, sending it back to the importer.
+ */
+function admin_clear_owner_match($owner_id)
+{
+    return query(
+        "UPDATE owners
+            SET company_number = NULL, company_name = NULL, company_status = NULL,
+                incorporated_on = NULL, parent_company_name = NULL,
+                parent_company_number = NULL, match_status = 'unmatched',
+                match_note = NULL, source = NULL, source_url = NULL,
+                source_licence = NULL, retrieved_at = NULL
+          WHERE id = ?",
+        $owner_id
+    ) !== false;
 }
 
 /**

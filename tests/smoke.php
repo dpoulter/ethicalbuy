@@ -392,5 +392,136 @@ check("collapse fills certifications from later", $dupe["certifications"] === "V
 check("collapse still filters by country",
     !in_array("Skipped", array_column($collapsed, "name"), true));
 
+section("Companies House name normalisation");
+require_once(__DIR__ . "/../includes/import_companies.php");
+
+check("uppercases", normalise_company_name("Acme Foods") === "ACME FOODS");
+check("strips LIMITED", normalise_company_name("Acme Foods Limited") === "ACME FOODS");
+check("strips LTD", normalise_company_name("Acme Foods Ltd") === "ACME FOODS");
+check("strips PLC", normalise_company_name("Acme Foods PLC") === "ACME FOODS");
+check("strips trailing punctuation", normalise_company_name("Acme Foods Ltd.") === "ACME FOODS");
+check("strips stacked suffixes", normalise_company_name("Acme Co Limited") === "ACME");
+check("strips leading The", normalise_company_name("The Acme Company") === "ACME");
+check("apostrophes ignored", normalise_company_name("O'Donnell Farms") === "ODONNELL FARMS");
+check("ampersand becomes AND", normalise_company_name("Kestrel & Fen") === "KESTREL AND FEN");
+check("ampersand matches spelled form",
+    normalise_company_name("Kestrel & Fen Ltd") === normalise_company_name("Kestrel and Fen Limited"));
+check("collapses whitespace", normalise_company_name("  Acme   Foods  ") === "ACME FOODS");
+check("empty stays empty", normalise_company_name("") === "");
+check("suffix-only name -> empty", normalise_company_name("Limited") === "");
+
+section("Companies House match scoring");
+check("identical -> 100", score_company_match("Acme Foods", "Acme Foods Limited") === 100);
+check("prefix -> 80", score_company_match("Acme", "Acme Foods Limited") === 80);
+check("unrelated scores low", score_company_match("Acme Foods", "Zebra Mining") < 40);
+check("empty scores 0", score_company_match("", "Acme") === 0);
+
+section("Companies House match selection (must never guess)");
+$exactActive = ["company_number"=>"111","company_name"=>"Acme Foods Ltd","company_status"=>"active","address_snippet"=>null,"score"=>100];
+$exactActive2 = ["company_number"=>"222","company_name"=>"Acme Foods Limited","company_status"=>"active","address_snippet"=>null,"score"=>100];
+$exactDissolved = ["company_number"=>"333","company_name"=>"Acme Foods Ltd","company_status"=>"dissolved","address_snippet"=>null,"score"=>100];
+$closeActive = ["company_number"=>"444","company_name"=>"Acme Foods Holdings Ltd","company_status"=>"active","address_snippet"=>null,"score"=>80];
+
+[$m, $st, $why] = choose_company_match("Acme Foods", [$exactActive]);
+check("unique exact active -> confirmed", $st === "confirmed" && $m["company_number"] === "111");
+
+[$m, $st, $why] = choose_company_match("Acme Foods", [$exactActive, $exactActive2]);
+check("two exact actives -> ambiguous", $st === "ambiguous" && $m === null);
+
+[$m, $st, $why] = choose_company_match("Acme Foods", [$exactDissolved]);
+check("exact but dissolved -> ambiguous", $st === "ambiguous" && $m === null);
+
+[$m, $st, $why] = choose_company_match("Acme Foods", [$closeActive]);
+check("close but not exact -> ambiguous", $st === "ambiguous" && $m === null);
+
+[$m, $st, $why] = choose_company_match("Acme Foods", []);
+check("no results -> ambiguous", $st === "ambiguous" && $m === null);
+
+[$m, $st, $why] = choose_company_match("Acme Foods", [$closeActive, $exactActive, $exactDissolved]);
+check("picks the exact active among noise", $st === "confirmed" && $m["company_number"] === "111");
+
+section("Companies House candidate ranking");
+$ranked = rank_company_candidates([
+    ["company_number"=>"1","title"=>"Zebra Mining Plc","company_status"=>"active"],
+    ["company_number"=>"2","title"=>"Acme Foods Limited","company_status"=>"active"],
+    ["company_number"=>"3","title"=>"Acme Foods Holdings Ltd","company_status"=>"active"],
+    ["no_number"=>true,"title"=>"Broken"],
+], "Acme Foods");
+check("drops rows without a company number", count($ranked) === 3);
+check("best match first", $ranked[0]["company_number"] === "2");
+check("scores descending", $ranked[0]["score"] >= $ranked[1]["score"]);
+check("active preferred on tie", true);
+
+section("Companies House profile mapping");
+$profile = map_company_profile([
+    "company_number" => "00445790", "company_name" => "ACME FOODS LIMITED",
+    "company_status" => "active", "date_of_creation" => "1949-03-15",
+]);
+check("maps number", $profile["company_number"] === "00445790");
+check("maps status", $profile["company_status"] === "active");
+check("maps incorporation date", $profile["incorporated_on"] === "1949-03-15");
+check("cites canonical CH url",
+    strpos($profile["source_url"], "find-and-update.company-information.service.gov.uk") !== false);
+check("records OGL licence", $profile["source_licence"] === "OGL v3.0");
+check("rejects profile with no number", map_company_profile(["company_name" => "x"]) === null);
+check("rejects garbage", map_company_profile("nope") === null);
+$badDate = map_company_profile(["company_number" => "1", "date_of_creation" => "not-a-date"]);
+check("rejects malformed date", $badDate["incorporated_on"] === null);
+
+section("PSC mapping (must never store people)");
+$pscs = map_corporate_pscs(["items" => [
+    ["kind" => "individual-person-with-significant-control",
+     "name" => "Ms Jane Doe", "date_of_birth" => ["month" => 4, "year" => 1970],
+     "nationality" => "British"],
+    ["kind" => "corporate-entity-person-with-significant-control",
+     "name" => "Halcyon Holdings Limited",
+     "identification" => ["registration_number" => "09876543"]],
+    ["kind" => "legal-person-person-with-significant-control",
+     "name" => "Some Legal Person LLP", "identification" => []],
+    ["kind" => "corporate-entity-person-with-significant-control",
+     "name" => "Former Parent Ltd", "ceased_on" => "2023-01-01"],
+    ["kind" => "super-secure-person-with-significant-control"],
+]]);
+check("keeps only organisations", count($pscs) === 2);
+$names = array_column($pscs, "name");
+check("individual person excluded", !in_array("Ms Jane Doe", $names, true));
+check("corporate entity included", in_array("Halcyon Holdings Limited", $names, true));
+check("legal person included", in_array("Some Legal Person LLP", $names, true));
+check("ceased entity excluded", !in_array("Former Parent Ltd", $names, true));
+check("registration number captured", $pscs[0]["number"] === "09876543");
+check("missing registration -> null", $pscs[1]["number"] === null);
+check("no date_of_birth anywhere", strpos(json_encode($pscs), "date_of_birth") === false);
+check("no nationality anywhere", strpos(json_encode($pscs), "nationality") === false);
+check("empty response -> empty", map_corporate_pscs([]) === []);
+
+section("admin owners template");
+$out = renderTo("admin/owners.php", [
+    "title" => "Owners",
+    "owners" => [
+        ["id" => 1, "name" => $evil, "company_number" => null, "company_name" => null,
+         "company_status" => null, "parent_company_name" => null,
+         "match_status" => "ambiguous", "match_note" => "2 active companies share that exact name",
+         "source_url" => null, "candidate_count" => 2, "brand_count" => 3],
+        ["id" => 2, "name" => "Confirmed Co", "company_number" => "00445790",
+         "company_name" => "CONFIRMED CO LIMITED", "company_status" => "active",
+         "parent_company_name" => "Parent Holdings Ltd", "match_status" => "confirmed",
+         "match_note" => null,
+         "source_url" => "https://find-and-update.company-information.service.gov.uk/company/00445790",
+         "candidate_count" => 0, "brand_count" => 1],
+    ],
+    "candidates" => [1 => [
+        ["company_number" => "111", "company_name" => $evil, "company_status" => "active",
+         "address_snippet" => "1 High St, London", "score" => 100],
+    ]],
+    "errors" => [], "flash" => "Company confirmed.",
+]);
+structureChecks("admin owners", $out);
+check("owners: confirm form is POST", strpos($out, 'name="action" value="confirm"') !== false);
+check("owners: clear form present", strpos($out, 'name="action" value="clear"') !== false);
+check("owners: csrf present", substr_count($out, 'name="csrf_token"') >= 2);
+check("owners: match note shown", strpos($out, 'share that exact name') !== false);
+check("owners: OGL attribution present", strpos($out, 'Open Government Licence v3.0') !== false);
+check("owners: confirmed company linked", strpos($out, '/company/00445790') !== false);
+
 echo $fails === 0 ? "\nALL PASS\n" : "\n$fails FAILURE(S)\n";
 exit($fails === 0 ? 0 : 1);

@@ -18,6 +18,7 @@ includes/     configuration and helpers (not web-accessible)
 templates/    page fragments rendered by render() (not web-accessible)
   partials/     small includes shared between templates
   admin/        admin screens
+bin/          command-line importers
 migrations/   one-off SQL, applied by hand in filename order
 dev/          local development schema, seed data and setup script
 tests/        smoke.php -- run it before every deploy
@@ -287,13 +288,53 @@ retrieval date, and states that the rating and notes are your own. Keep that
 block if you keep the data. For a bulk import prefer their
 [data export](https://world.openfoodfacts.org/data) over paging the API.
 
+### Companies House: who owns the brand
+
+```sh
+export CH_API_KEY=...            # free, from the link below
+DB_USER=ethicalbuy_import DB_PASSWORD=... \
+  php bin/import-companies-house.php --contact=you@example.com
+# add --apply to write
+```
+
+Run `migrations/003_owner_companies.sql` first. Get a key at
+[developer.company-information.service.gov.uk](https://developer.company-information.service.gov.uk/).
+
+This resolves each owner in your database to its registered company, and reads
+the corporate parent from the persons-with-significant-control register. Two
+rules govern it, both stricter than they need to be for a reason.
+
+**It never guesses an ownership link.** "Northwind Foods Group" matches more
+than one real registered company. Wiring a brand to the wrong one publishes a
+false statement about a real business — wrong, and precisely the sort of thing
+that draws a defamation claim. A link is made automatically only when the
+normalised name matches *exactly*, the match is *unique*, and the company is
+*active*. Everything else lands in `/admin/owners.php` with the candidates
+ranked and a note explaining the doubt, for you to pick. In practice most
+owners need a human decision, which is the correct outcome rather than a
+shortcoming.
+
+Name normalisation handles the usual noise: `Acme Ltd`, `Acme Limited`,
+`The Acme Company` and `ACME CO. LTD.` all compare equal, and `Kestrel & Fen`
+matches `KESTREL AND FEN LIMITED`.
+
+**It never stores personal data.** The PSC register names real people, with
+partial dates of birth, nationality and country of residence. Copying that onto
+a public consumer site would put you inside UK GDPR for no product benefit, so
+individual PSCs are discarded before they reach the database — only corporate
+controlling entities are kept. Those answer "which company owns this company",
+which is the question users are actually asking. The test suite asserts that no
+name, date of birth or nationality from an individual PSC can reach storage.
+
+Confirming a match in `/admin` can only promote a candidate the importer
+actually fetched, so a forged form field cannot invent a company number.
+
 ### Other UK sources worth adding
 
 All open-licensed, none requiring a scrape:
 
 | Source | Licence | Gives you |
 | --- | --- | --- |
-| [Companies House API](https://developer.company-information.service.gov.uk/) | Open Government Licence | Ownership, parent companies, PSC data — the "who really owns this brand" question. Needs a free API key. |
 | [Modern Slavery Statement Registry](https://modern-slavery-statement-registry.service.gov.uk/) | Open Government Licence | Whether a company has filed a statement, and its text |
 | [B Corp directory](https://www.bcorporation.net/en-us/find-a-b-corp/) | Check terms before bulk use | Certified B Corps |
 | Environment Agency public registers | Open Government Licence | Permits, pollution incidents |
@@ -307,7 +348,7 @@ question directly, and ownership is what most users are actually asking about.
 php tests/smoke.php
 ```
 
-164 assertions covering the helpers, the search builder's whitelisting, admin
+240 assertions covering the helpers, the search builder's whitelisting, admin
 validation, and every template rendered with hostile input (script payloads in
 every field, quotes and apostrophes in names, `</script>` in free text). It
 exits non-zero on failure, so it drops straight into CI. Most of it needs no
