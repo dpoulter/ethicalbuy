@@ -32,9 +32,30 @@
       <dt class="col-sm-3">Availability</dt>
       <dd class="col-sm-9"><?= e($brand["availability"]) ?></dd>
 
+      <?php if (!empty($brand["certifications"])): ?>
+        <dt class="col-sm-3">Certifications</dt>
+        <dd class="col-sm-9">
+          <?php foreach (explode(",", $brand["certifications"]) as $certification): ?>
+            <span class="badge text-bg-light border me-1"><?= e(trim($certification)) ?></span>
+          <?php endforeach ?>
+        </dd>
+      <?php endif ?>
+
       <dt class="col-sm-3">Notes</dt>
       <dd class="col-sm-9"><?= nl2br(e($brand["notes"])) ?></dd>
     </dl>
+
+    <?php if (!empty($brand["source_url"])): ?>
+      <p class="small text-muted mb-0 mt-3">
+        Product facts from
+        <a href="<?= e($brand["source_url"]) ?>" rel="noopener nofollow" target="_blank">
+          <?= e($brand["source"] === "openfoodfacts" ? "Open Food Facts" : $brand["source"]) ?></a><?php
+        if (!empty($brand["source_licence"])): ?>, licensed <?= e($brand["source_licence"]) ?><?php
+        endif ?><?php if (!empty($brand["retrieved_at"])): ?>,
+        retrieved <?= e(substr((string) $brand["retrieved_at"], 0, 10)) ?><?php endif ?>.
+        The rating and notes are our own.
+      </p>
+    <?php endif ?>
   </div>
 </div>
 

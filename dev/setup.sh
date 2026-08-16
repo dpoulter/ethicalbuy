@@ -18,6 +18,11 @@ DB_USER="${DB_USER:-ethicalbuy}"
 DB_PASSWORD="${DB_PASSWORD:-ethicalbuy_dev}"
 ADMIN_USER="${ADMIN_USER:-root}"
 
+# The importer runs as its own account: it needs to create categories, which
+# the web application must never be able to do.
+IMPORT_USER="${IMPORT_USER:-ethicalbuy_import}"
+IMPORT_PASSWORD="${IMPORT_PASSWORD:-ethicalbuy_import_dev}"
+
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(dirname "$HERE")"
 
@@ -36,6 +41,7 @@ admin <<SQL
 CREATE DATABASE IF NOT EXISTS \`$DB_NAME\`
     DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 CREATE USER IF NOT EXISTS '$DB_USER'@'localhost' IDENTIFIED BY '$DB_PASSWORD';
+CREATE USER IF NOT EXISTS '$IMPORT_USER'@'localhost' IDENTIFIED BY '$IMPORT_PASSWORD';
 SQL
 
 echo "==> Loading schema"
@@ -83,6 +89,11 @@ GRANT INSERT ON \`$DB_NAME\`.jobs             TO '$DB_USER'@'localhost';
 GRANT SELECT                         ON \`$DB_NAME\`.categories TO '$DB_USER'@'localhost';
 GRANT SELECT                         ON \`$DB_NAME\`.owners     TO '$DB_USER'@'localhost';
 GRANT SELECT, INSERT, UPDATE, DELETE ON \`$DB_NAME\`.brands     TO '$DB_USER'@'localhost';
+
+-- importer: may add brands and categories, may never delete anything
+GRANT SELECT, INSERT, UPDATE ON \`$DB_NAME\`.brands     TO '$IMPORT_USER'@'localhost';
+GRANT SELECT, INSERT         ON \`$DB_NAME\`.categories TO '$IMPORT_USER'@'localhost';
+GRANT SELECT, INSERT         ON \`$DB_NAME\`.owners     TO '$IMPORT_USER'@'localhost';
 FLUSH PRIVILEGES;
 SQL
 
@@ -91,5 +102,10 @@ echo "Done. Run the site with:"
 echo
 echo "  DB_NAME=$DB_NAME DB_USER=$DB_USER DB_PASSWORD=$DB_PASSWORD APP_DEBUG=1 \\"
 echo "    php -S 127.0.0.1:8000 -t public"
+echo
+echo "Import brand facts (dry run; add --apply to write):"
+echo
+echo "  DB_NAME=$DB_NAME DB_USER=$IMPORT_USER DB_PASSWORD=$IMPORT_PASSWORD \\"
+echo "    php bin/import-openfoodfacts.php --category=en:chocolates --contact=you@example.com"
 echo
 admin "$DB_NAME" -e "SELECT COUNT(*) AS brands, COUNT(rating) AS rated FROM brand_v;"

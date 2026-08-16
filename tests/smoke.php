@@ -312,5 +312,85 @@ check("admin delete: is a POST form", strpos($out, 'method="post"') !== false);
 check("admin delete: csrf present", strpos($out, 'name="csrf_token"') !== false);
 check("admin delete: id carried in hidden field", strpos($out, 'name="id" value="7"') !== false);
 
+section("Open Food Facts mapping");
+require_once(__DIR__ . "/../includes/import.php");
+
+check("tag -> name", off_tag_to_name("en:dark-chocolates") === "Dark chocolates");
+check("tag without prefix", off_tag_to_name("chocolates") === "Chocolates");
+check("empty tag -> null", off_tag_to_name("") === null);
+check("clean collapses whitespace", clean_value("  a   b  ") === "a b");
+check("clean empty -> null", clean_value("   ") === null);
+check("clean rejects arrays", clean_value(["x"]) === null);
+check("clean truncates", clean_value("abcdef", 3) === "abc");
+
+$ukProduct = [
+    "code" => "5000112637922",
+    "product_name" => "Dark Chocolate Bar",
+    "brands" => "Greenfields, Some Other Brand",
+    "brands_tags" => ["greenfields", "some-other-brand"],
+    "categories_tags" => ["en:snacks", "en:sweet-snacks", "en:dark-chocolates"],
+    "countries_tags" => ["en:united-kingdom", "en:france"],
+    "labels_tags" => ["en:organic", "en:fairtrade", "en:some-junk-tag"],
+    "stores" => "Tesco, Sainsbury's",
+];
+$m = map_off_product($ukProduct);
+check("maps a UK product", is_array($m));
+check("takes first brand, human cased", $m["name"] === "Greenfields");
+check("category from most general tag", $m["category"] === "Snacks");
+check("type from most specific tag", $m["type"] === "Dark chocolates");
+check("availability from first store", $m["availability"] === "Tesco");
+check("known certifications kept", strpos($m["certifications"], "Organic") !== false
+    && strpos($m["certifications"], "Fairtrade") !== false);
+check("unknown label tags dropped", strpos($m["certifications"], "junk") === false);
+check("provenance: source", $m["source"] === "openfoodfacts");
+check("provenance: licence", $m["source_licence"] === "ODbL 1.0");
+check("provenance: url contains code", strpos($m["source_url"], "5000112637922") !== false);
+check("NEVER imports a rating", !array_key_exists("rating", $m));
+check("NEVER imports notes", !array_key_exists("notes", $m));
+
+$nonUk = $ukProduct;
+$nonUk["countries_tags"] = ["en:france"];
+check("non-UK product skipped", map_off_product($nonUk) === null);
+check("country filter can be disabled", is_array(map_off_product($nonUk, null)));
+
+$noBrand = $ukProduct;
+unset($noBrand["brands"], $noBrand["brands_tags"]);
+check("product with no brand skipped", map_off_product($noBrand) === null);
+
+$slugOnly = $ukProduct;
+unset($slugOnly["brands"]);
+check("falls back to brand slug", map_off_product($slugOnly)["name"] === "Greenfields");
+
+$bare = ["code" => "1", "brands" => "Bare Co", "countries_tags" => ["en:united-kingdom"]];
+$mb = map_off_product($bare);
+check("bare product still maps", $mb["name"] === "Bare Co");
+check("bare product has null category", $mb["category"] === null);
+check("bare product has null certifications", $mb["certifications"] === null);
+check("garbage input -> null", map_off_product("not an array") === null);
+check("empty array -> null", map_off_product([]) === null);
+
+$storesTagsOnly = $ukProduct;
+unset($storesTagsOnly["stores"]);
+$storesTagsOnly["stores_tags"] = ["waitrose"];
+check("falls back to stores_tags", map_off_product($storesTagsOnly)["availability"] === "Waitrose");
+
+// collapsing: two products, same brand, complementary data
+$collapsed = collapse_off_products([
+    ["code" => "1", "brands" => "Dupe Co", "countries_tags" => ["en:united-kingdom"],
+     "categories_tags" => ["en:drinks"]],
+    ["code" => "2", "brands" => "dupe co", "countries_tags" => ["en:united-kingdom"],
+     "stores" => "Co-op", "labels_tags" => ["en:vegan"]],
+    ["code" => "3", "brands" => "Other Co", "countries_tags" => ["en:united-kingdom"]],
+    ["code" => "4", "brands" => "Skipped", "countries_tags" => ["en:france"]],
+]);
+check("collapses case-insensitively to 2 brands", count($collapsed) === 2);
+$dupe = $collapsed[0];
+check("collapse keeps first name casing", $dupe["name"] === "Dupe Co");
+check("collapse keeps first category", $dupe["category"] === "Drinks");
+check("collapse fills blank from later product", $dupe["availability"] === "Co-op");
+check("collapse fills certifications from later", $dupe["certifications"] === "Vegan");
+check("collapse still filters by country",
+    !in_array("Skipped", array_column($collapsed, "name"), true));
+
 echo $fails === 0 ? "\nALL PASS\n" : "\n$fails FAILURE(S)\n";
 exit($fails === 0 ? 0 : 1);

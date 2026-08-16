@@ -429,8 +429,13 @@ function log_job($job_name)
     query("INSERT INTO jobs (job_name) VALUES (?)", $job_name);
 }
 
-// the only columns any page reads, and the only fields/sorts a request may name
+// columns for lists and search
 define("BRAND_COLUMNS", "brand, category, type, owner, notes, availability, rating");
+
+// the detail page additionally shows certifications and cites its sources.
+// Requires migrations/002_brand_provenance.sql.
+define("BRAND_DETAIL_COLUMNS", BRAND_COLUMNS .
+    ", certifications, source, source_url, source_licence, retrieved_at");
 
 const SEARCH_FIELDS = ["brand", "category", "type", "owner"];
 
@@ -537,7 +542,7 @@ function get_categories()
 function get_brand($brand)
 {
     $rows = query(
-        "SELECT " . BRAND_COLUMNS . "
+        "SELECT " . BRAND_DETAIL_COLUMNS . "
            FROM brand_v
           WHERE brand = ?
           LIMIT 1",

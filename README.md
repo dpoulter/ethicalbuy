@@ -217,6 +217,90 @@ location /admin/ {
 Basic auth has no lockout or rate limiting. If `/admin` is internet-facing,
 put fail2ban or an equivalent on the 401s in your access log.
 
+## Importing real data
+
+```sh
+# dry run -- prints what it would change, writes nothing
+DB_USER=ethicalbuy_import DB_PASSWORD=... \
+  php bin/import-openfoodfacts.php --category=en:chocolates --contact=you@example.com
+
+# same again with --apply to write
+```
+
+Run `migrations/002_brand_provenance.sql` first. The brand page will fail to
+load until you do, because it selects the provenance columns.
+
+### The rule: import facts, never ratings
+
+An import writes brand name, category, product type, where it is sold, and
+which certifications a source records. It **never** writes a rating and
+**never** writes notes. New brands arrive as *Not rated* and wait for you in
+`/admin`.
+
+That is a deliberate legal and editorial position, not caution for its own
+sake:
+
+- **Someone else's ratings are their property.** In the UK a compiled database
+  attracts *database right* (Copyright and Rights in Databases Regulations
+  1997) on top of copyright. Ethical Consumer and similar publishers are
+  subscription co-operatives whose ratings are the product. Copying them is
+  infringement, and doing it to build a competing free site would be a poor
+  way to treat the people doing the underlying research. If you want their
+  data, licence it.
+- **A published rating carries defamation risk.** Saying a named company scores
+  1/10 for serious ethical problems is a statement that can be sued over, and
+  UK law favours the claimant. The defences that matter — truth, and honest
+  opinion based on facts you indicate — both require *you* to hold the
+  evidence. A scraped score gives you the liability without the file to defend
+  it. Ratings you derive from sourced facts, with the facts shown, are the
+  defensible version.
+- **Facts with a citation are neither problem.** Ownership, certifications and
+  stockists are verifiable, and every imported row records where it came from.
+
+### Safety properties
+
+The importer is built so a bad run cannot quietly damage your data:
+
+- **Dry run by default.** It writes only with `--apply`.
+- **Never overwrites a value that is already there.** It fills blanks. Your
+  edits always win.
+- **Never touches `rating` or `notes`.**
+- **Fails loudly.** A partial failure — for example lacking privilege to create
+  a category — aborts that brand rather than filing it wrongly and reporting
+  success.
+- **Idempotent.** Re-running reports `unchanged` rather than duplicating.
+- **Identifies itself.** It refuses to run without `--contact`, sends a
+  descriptive User-Agent, and sleeps between requests. On the first run use
+  `--dump` to print a raw product and confirm the field names.
+
+### Database user
+
+The importer runs as its own account (`ethicalbuy_import` in dev), because it
+needs INSERT on `categories`, which the web application must never have. It has
+no DELETE anywhere.
+
+### Attribution
+
+Open Food Facts is ODbL 1.0: reuse is allowed, including commercially, with
+attribution and share-alike. The brand page credits the source, licence and
+retrieval date, and states that the rating and notes are your own. Keep that
+block if you keep the data. For a bulk import prefer their
+[data export](https://world.openfoodfacts.org/data) over paging the API.
+
+### Other UK sources worth adding
+
+All open-licensed, none requiring a scrape:
+
+| Source | Licence | Gives you |
+| --- | --- | --- |
+| [Companies House API](https://developer.company-information.service.gov.uk/) | Open Government Licence | Ownership, parent companies, PSC data — the "who really owns this brand" question. Needs a free API key. |
+| [Modern Slavery Statement Registry](https://modern-slavery-statement-registry.service.gov.uk/) | Open Government Licence | Whether a company has filed a statement, and its text |
+| [B Corp directory](https://www.bcorporation.net/en-us/find-a-b-corp/) | Check terms before bulk use | Certified B Corps |
+| Environment Agency public registers | Open Government Licence | Permits, pollution incidents |
+
+Companies House is the highest-value next one: it answers the ownership
+question directly, and ownership is what most users are actually asking about.
+
 ## Tests
 
 ```sh
