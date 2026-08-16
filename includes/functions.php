@@ -421,10 +421,12 @@ function build_brand_search($options = [])
  */
 function get_categories()
 {
+    // "category IS NULL" first keeps uncategorised brands at the end, so the
+    // page doesn't open on the least useful group
     return query(
         "SELECT " . BRAND_COLUMNS . "
            FROM brand_v
-          ORDER BY category, brand"
+          ORDER BY category IS NULL, category, brand"
     );
 }
 

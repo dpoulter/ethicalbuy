@@ -12,10 +12,12 @@ public/       web root -- the only directory the web server should serve
   brand.php     single brand detail, with alternatives in the same category
   about.php     what the site is and how ratings work
   contact.php   contact form
+  vendor/       vendored front-end libraries
 includes/     configuration and helpers (not web-accessible)
 templates/    page fragments rendered by render() (not web-accessible)
   partials/     small includes shared between templates
 migrations/   one-off SQL, applied by hand in filename order
+dev/          local development schema, seed data and setup script
 ```
 
 `templates/header.php` opens the HTML document and `templates/footer.php`
@@ -136,16 +138,42 @@ browser, so PHP and JavaScript cannot disagree.
   avoids trusting the client-supplied `Host` header. Use it after a successful
   POST so a refresh doesn't resubmit.
 
-## Front-end
+## Local development
 
-Bootstrap 5.3.0 is loaded from jsDelivr; there are no other front-end
-dependencies. If you would rather not depend on a CDN, vendor the two files
-under `public/vendor/` and update `templates/header.php` and
-`templates/footer.php`. To pin the CDN copies with Subresource Integrity:
+`dev/setup.sh` builds a working database from nothing: it creates the schema,
+loads sample data, applies the migrations, and grants the app user least
+privilege. It needs a running MySQL or MariaDB you can reach as an admin.
 
 ```sh
-curl -s https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css \
-  | openssl dgst -sha384 -binary | openssl base64 -A
+./dev/setup.sh
+
+DB_PASSWORD=ethicalbuy_dev APP_DEBUG=1 php -S 127.0.0.1:8000 -t public
 ```
 
-then add `integrity="sha384-..." crossorigin="anonymous"` to the tag.
+- `dev/schema.sql` is a **reconstruction** of the tables behind `brand_v`,
+  inferred from the columns the app reads. It is not a copy of production.
+  Replace it with `mysqldump --no-data ethicalbuy > dev/schema.sql` when you
+  have the real thing.
+- `dev/seed.sql` contains **entirely invented** brands and companies. Real
+  companies are avoided deliberately so no fabricated ethical rating can be
+  mistaken for a real assessment. Never load it into production.
+
+The seed data is chosen to exercise the awkward cases: every rating band plus
+unrated brands, a brand with no category, a row that is almost entirely NULL,
+apostrophes and double quotes in names, and a non-ASCII brand name that will
+catch a broken connection charset.
+
+## Front-end
+
+Bootstrap 5.3.8 is vendored under `public/vendor/bootstrap/`. There are no
+other front-end dependencies, no build step, and no CDN: the site renders
+correctly on a network that cannot reach jsDelivr, which is also what makes it
+screenshot-testable in CI.
+
+To upgrade:
+
+```sh
+npm install bootstrap@5.3.x --no-save --prefix /tmp/bs
+cp /tmp/bs/node_modules/bootstrap/dist/css/bootstrap.min.css public/vendor/bootstrap/
+cp /tmp/bs/node_modules/bootstrap/dist/js/bootstrap.bundle.min.js public/vendor/bootstrap/
+```
