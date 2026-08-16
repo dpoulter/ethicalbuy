@@ -30,8 +30,10 @@ foreach ($rows as $row)
         "owner" => $row["owner"],
         "availability" => $row["availability"],
 
-        // decided server-side so PHP and JS can't disagree about colours
+        // decided server-side so PHP and JS can't disagree about ratings
         "ratingClass" => rating_class($row["rating"]),
+        "ratingScore" => rating_score($row["rating"]),
+        "ratingLabel" => rating_class($row["rating"]) === "" ? "" : rating_label($row["rating"]),
     ];
 }
 

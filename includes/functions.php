@@ -157,18 +157,18 @@ function redirect($destination)
         header("Location: " . $destination);
     }
 
-    // handle absolute path -- built from SITE_URL, never from the
-    // client-supplied Host header
+    // handle absolute path -- sent as-is. A relative Location is valid per
+    // RFC 7231, so we never have to trust the client-supplied Host header.
     else if (preg_match("/^\//", $destination))
     {
-        header("Location: " . rtrim(SITE_URL, "/") . $destination);
+        header("Location: " . $destination);
     }
 
-    // handle relative path
+    // handle relative path, resolved against the current directory
     else
     {
-        $path = rtrim(dirname($_SERVER["PHP_SELF"]), "/\\");
-        header("Location: " . rtrim(SITE_URL, "/") . "$path/$destination");
+        $path = rtrim(dirname($_SERVER["SCRIPT_NAME"]), "/\\");
+        header("Location: $path/$destination");
     }
 
     // exit immediately since we're redirecting anyway
@@ -221,6 +221,99 @@ function rating_class($rating)
 }
 
 /**
+ * The rating bands, in display order. Used by the legend so the key on
+ * screen can never drift from rating_class().
+ */
+function rating_bands()
+{
+    return [
+        ["class" => "success",   "range" => "9 - 10", "label" => "Excellent", "blurb" => "Strong ethical record across the board."],
+        ["class" => "primary",   "range" => "7 - 8",  "label" => "Good",      "blurb" => "Generally good practice, minor concerns."],
+        ["class" => "secondary", "range" => "5 - 6",  "label" => "Mixed",     "blurb" => "Some good practice, some real concerns."],
+        ["class" => "warning",   "range" => "4",      "label" => "Poor",      "blurb" => "Significant concerns on several counts."],
+        ["class" => "danger",    "range" => "1 - 3",  "label" => "Avoid",     "blurb" => "Serious, well-documented ethical problems."],
+        ["class" => "",          "range" => "-",      "label" => "Not rated", "blurb" => "We have not assessed this brand yet."],
+    ];
+}
+
+/**
+ * Short human label for a rating, e.g. "Good".
+ */
+function rating_label($rating)
+{
+    $class = rating_class($rating);
+
+    foreach (rating_bands() as $band)
+    {
+        if ($band["class"] === $class)
+        {
+            return $band["label"];
+        }
+    }
+
+    return "Not rated";
+}
+
+/**
+ * Formats a rating for display, e.g. "8/10" or "Not rated".
+ */
+function rating_score($rating)
+{
+    if ($rating === null || $rating === "" || !is_numeric($rating))
+    {
+        return "Not rated";
+    }
+
+    // show 7 rather than 7.0, but keep 7.5 intact
+    $rating = (float) $rating;
+    $formatted = ($rating == (int) $rating) ? (string) (int) $rating : (string) $rating;
+
+    return "$formatted/10";
+}
+
+/**
+ * Reads a string from $_GET/$_POST, defending against array-valued input
+ * such as ?field[]=x, which would otherwise raise a conversion notice.
+ */
+function input_string(array $source, $key, $default = "")
+{
+    $value = $source[$key] ?? $default;
+
+    return is_string($value) ? trim($value) : $default;
+}
+
+/**
+ * Returns this session's CSRF token, creating one if needed.
+ */
+function csrf_token()
+{
+    if (empty($_SESSION["csrf_token"]))
+    {
+        $_SESSION["csrf_token"] = bin2hex(random_bytes(32));
+    }
+
+    return $_SESSION["csrf_token"];
+}
+
+/**
+ * Renders the hidden CSRF field for a form.
+ */
+function csrf_field()
+{
+    return '<input type="hidden" name="csrf_token" value="' . e(csrf_token()) . '">';
+}
+
+/**
+ * True if the submitted token matches this session's.
+ */
+function csrf_valid($token)
+{
+    return !empty($_SESSION["csrf_token"])
+        && is_string($token)
+        && hash_equals($_SESSION["csrf_token"], $token);
+}
+
+/**
  * Insert message into log table
  */
 function write_log($module, $text)
@@ -236,30 +329,91 @@ function log_job($job_name)
     query("INSERT INTO jobs (job_name) VALUES (?)", $job_name);
 }
 
+// the only columns any page reads, and the only fields/sorts a request may name
+define("BRAND_COLUMNS", "brand, category, type, owner, notes, availability, rating");
+
+const SEARCH_FIELDS = ["brand", "category", "type", "owner"];
+
+const SEARCH_SORTS = [
+    "relevance"   => "brand ASC",
+    "brand"       => "brand ASC",
+    "category"    => "category ASC, brand ASC",
+    "rating_desc" => "rating IS NULL, rating DESC, brand ASC",
+    "rating_asc"  => "rating IS NULL, rating ASC, brand ASC",
+];
+
 /**
- * Search brands by category. Returns rows, or false on error.
+ * Searches brands with optional filters. Returns rows, or false on error.
+ *
+ * $options:
+ *   term         string  text to match (empty matches everything)
+ *   field        string  one of SEARCH_FIELDS; anything else falls back to brand
+ *   min_rating   string  only return brands rated at least this
+ *   max_rating   string  only return brands rated at most this
+ *   availability string  exact availability match
+ *   sort         string  a key of SEARCH_SORTS
+ *
+ * $options never reaches the SQL string directly: field and sort are resolved
+ * against the whitelists above, everything else is bound as a parameter.
  */
-function search_categories($search_string)
+function search_brands($options = [])
 {
-    return query(
-        "SELECT brand, category, type, owner, notes, availability, rating
-           FROM brand_v
-          WHERE UPPER(category) LIKE UPPER(?)",
-        "%" . like_escape($search_string) . "%"
-    );
+    [$sql, $params] = build_brand_search($options);
+
+    return query($sql, ...$params);
 }
 
 /**
- * Search brands by name. Returns rows, or false on error.
+ * Builds the SQL and bound parameters for search_brands().
+ *
+ * Split out from search_brands() so the whitelisting can be tested without
+ * a database. Returns [$sql, $params].
  */
-function search_brands($search_string)
+function build_brand_search($options = [])
 {
-    return query(
-        "SELECT brand, category, type, owner, notes, availability, rating
-           FROM brand_v
-          WHERE UPPER(brand) LIKE UPPER(?)",
-        "%" . like_escape($search_string) . "%"
-    );
+    $field = in_array($options["field"] ?? "", SEARCH_FIELDS, true)
+        ? $options["field"]
+        : "brand";
+
+    $order = SEARCH_SORTS[$options["sort"] ?? ""] ?? SEARCH_SORTS["brand"];
+
+    $where = [];
+    $params = [];
+
+    $term = trim((string) ($options["term"] ?? ""));
+    if ($term !== "")
+    {
+        $where[] = "UPPER($field) LIKE UPPER(?)";
+        $params[] = "%" . like_escape($term) . "%";
+    }
+
+    if (is_numeric($options["min_rating"] ?? null))
+    {
+        $where[] = "rating >= ?";
+        $params[] = (float) $options["min_rating"];
+    }
+
+    if (is_numeric($options["max_rating"] ?? null))
+    {
+        $where[] = "rating <= ?";
+        $params[] = (float) $options["max_rating"];
+    }
+
+    $availability = trim((string) ($options["availability"] ?? ""));
+    if ($availability !== "")
+    {
+        $where[] = "availability = ?";
+        $params[] = $availability;
+    }
+
+    $sql = "SELECT " . BRAND_COLUMNS . " FROM brand_v";
+    if ($where)
+    {
+        $sql .= " WHERE " . implode(" AND ", $where);
+    }
+    $sql .= " ORDER BY $order";
+
+    return [$sql, $params];
 }
 
 /**
@@ -268,10 +422,81 @@ function search_brands($search_string)
 function get_categories()
 {
     return query(
-        "SELECT brand, category, type, owner, notes, availability, rating
+        "SELECT " . BRAND_COLUMNS . "
            FROM brand_v
           ORDER BY category, brand"
     );
+}
+
+/**
+ * Get a single brand by name. Returns a row, null if not found,
+ * or false on error.
+ */
+function get_brand($brand)
+{
+    $rows = query(
+        "SELECT " . BRAND_COLUMNS . "
+           FROM brand_v
+          WHERE brand = ?
+          LIMIT 1",
+        $brand
+    );
+
+    if ($rows === false)
+    {
+        return false;
+    }
+
+    return $rows[0] ?? null;
+}
+
+/**
+ * Get every brand in a category, for the "more like this" list on a
+ * brand page. Returns rows, or false on error.
+ */
+function get_brands_in_category($category, $exclude_brand = null)
+{
+    return query(
+        "SELECT " . BRAND_COLUMNS . "
+           FROM brand_v
+          WHERE category <=> ?
+            AND (? IS NULL OR brand <> ?)
+          ORDER BY rating IS NULL, rating DESC, brand",
+        $category,
+        $exclude_brand,
+        $exclude_brand
+    );
+}
+
+/**
+ * Distinct availability values, for the search filter dropdown.
+ * Read from the data rather than hardcoded. Returns a list of strings.
+ */
+function get_availability_options()
+{
+    $rows = query(
+        "SELECT DISTINCT availability
+           FROM brand_v
+          WHERE availability IS NOT NULL AND availability <> ''
+          ORDER BY availability"
+    );
+
+    return $rows === false ? [] : array_column($rows, "availability");
+}
+
+/**
+ * Records a contact form submission. Returns true on success.
+ */
+function save_contact_message($name, $email, $message)
+{
+    $result = query(
+        "INSERT INTO contact_messages (name, email, message) VALUES (?, ?, ?)",
+        $name,
+        $email,
+        $message
+    );
+
+    return $result !== false;
 }
 
 /**

@@ -3,29 +3,46 @@
 require_once(__DIR__ . "/../includes/config.php");
 
 // searching is a read, so it uses GET: results stay linkable and re-runnable
-$search_string = trim($_GET["search_string"] ?? "");
+$filters = [
+    "term"         => input_string($_GET, "search_string"),
+    "field"        => input_string($_GET, "field", "brand"),
+    "min_rating"   => input_string($_GET, "min_rating"),
+    "availability" => input_string($_GET, "availability"),
+    "sort"         => input_string($_GET, "sort", "brand"),
+];
 
-// no search submitted yet -- show the form
-if (!isset($_GET["search_string"]))
+// normalise anything the request invented, so the form redisplays valid values
+if (!in_array($filters["field"], SEARCH_FIELDS, true))
 {
-    render("search_form.php", ["title" => "Product Search"]);
-    exit;
+    $filters["field"] = "brand";
+}
+if (!isset(SEARCH_SORTS[$filters["sort"]]))
+{
+    $filters["sort"] = "brand";
+}
+if (!is_numeric($filters["min_rating"]))
+{
+    $filters["min_rating"] = "";
 }
 
-if ($search_string === "")
+// an empty search with no filters is a valid "show me everything" browse
+$submitted = isset($_GET["submitted"]);
+$results = [];
+
+if ($submitted)
 {
-    apologize("You haven't entered a search string.");
+    $results = search_brands($filters);
+
+    if ($results === false)
+    {
+        apologize("We could not run that search just now. Please try again shortly.");
+    }
 }
 
-$results = search_brands($search_string);
-
-if ($results === false)
-{
-    apologize("We could not run that search just now. Please try again shortly.");
-}
-
-render("search_results.php", [
-    "title" => "Search Results",
+render("search.php", [
+    "title" => $submitted ? "Search Results" : "Product Search",
+    "filters" => $filters,
+    "submitted" => $submitted,
     "results" => $results,
-    "search_string" => $search_string,
+    "availability_options" => get_availability_options(),
 ]);

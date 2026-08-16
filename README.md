@@ -6,11 +6,16 @@ can browse brands by category or search for a brand by name.
 ## Layout
 
 ```
-public/      web root -- the only directory the web server should serve
-  index.php    category browser
-  search.php   brand search
-includes/    configuration and helpers (not web-accessible)
-templates/   page fragments rendered by render() (not web-accessible)
+public/       web root -- the only directory the web server should serve
+  index.php     category browser
+  search.php    brand search with filters
+  brand.php     single brand detail, with alternatives in the same category
+  about.php     what the site is and how ratings work
+  contact.php   contact form
+includes/     configuration and helpers (not web-accessible)
+templates/    page fragments rendered by render() (not web-accessible)
+  partials/     small includes shared between templates
+migrations/   one-off SQL, applied by hand in filename order
 ```
 
 `templates/header.php` opens the HTML document and `templates/footer.php`
@@ -78,8 +83,19 @@ CREATE TABLE jobs (
 );
 ```
 
-Give the app's database user `SELECT` on `brand_v` and `INSERT` on the two log
-tables — nothing more.
+Give the app's database user `SELECT` on `brand_v` and `INSERT` on the log and
+contact tables — nothing more.
+
+### Migrations
+
+Apply anything in `migrations/` by hand, in filename order:
+
+```sh
+mysql -u root -p ethicalbuy < migrations/001_contact_messages.sql
+```
+
+`001_contact_messages.sql` creates the table behind the contact form. **The
+contact page will report a save failure until it is applied.**
 
 ### Ratings
 
@@ -101,10 +117,24 @@ browser, so PHP and JavaScript cannot disagree.
 - **All SQL goes through `query()` with bound parameters.** Never concatenate a
   value into a statement. `like_escape()` escapes `%` and `_` in user input
   before it is wrapped in wildcards.
+- **Anything that cannot be a bound parameter must be whitelisted.** Column and
+  sort names are structure, not values, so `build_brand_search()` resolves them
+  against `SEARCH_FIELDS` and `SEARCH_SORTS` and falls back to a safe default.
+  It returns `[$sql, $params]` so this can be tested without a database.
 - **All output is escaped**: `e()` for HTML, `json_for_html()` for data
-  embedded in a `<script>` block.
+  embedded in a `<script>` block, `urlencode()` for values put in a query
+  string.
+- **Every state-changing form carries a CSRF token**: emit `csrf_field()` in
+  the form and check `csrf_valid()` before acting on the POST. Reads (search,
+  browse) use GET and need no token.
+- Validation errors are an array keyed by field name; entries with integer keys
+  are treated as form-wide. Templates re-display submitted values so a failed
+  submission never loses the user's typing.
 - `apologize()` renders a whole page and exits, so it must be called before any
   output — from `public/*.php`, never from inside a template.
+- `redirect()` sends a relative `Location`, which is valid per RFC 7231 and
+  avoids trusting the client-supplied `Host` header. Use it after a successful
+  POST so a refresh doesn't resubmit.
 
 ## Front-end
 
