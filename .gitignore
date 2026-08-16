@@ -1,0 +1,19 @@
+# local environment / secrets
+.env
+.env.local
+
+# editor and OS noise
+*.bak
+*.orig
+*.swp
+*~
+.DS_Store
+.idea/
+.vscode/
+
+# dependencies and build output
+/vendor/
+/node_modules/
+
+# logs
+*.log

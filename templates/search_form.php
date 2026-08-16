@@ -1,30 +1,12 @@
+<h3>Product Search</h3>
 
- <!DOCTYPE html>
-<html>
-  <head>
-
-  <style>
-        
-    </style>
-  	<style type="text/css">
-      ul{padding:2px;list-style:none;}
-      label{float:left;}
-    </style>
-    <title>Product Search</title>
-  </head>
-  <body>
-    <h3>Product Search</h3>
-    <form action="search.php" method="post">
-    <fieldset>
-        <div class="form-group col-md-4">
-        	<ul>
-            
-             <li>	<input  class="form-control" name="search_string" placeholder="Search String" type="text"/></input></li>
-        	</ul>
-            <button type="submit" class="btn btn-outline-primary">Search</button>
-          
-        </div>
-    </fieldset>
-    </form>
-  </body>
- </html>
+<form action="search.php" method="get">
+  <div class="col-md-6">
+    <label for="search_string" class="form-label">Brand name</label>
+    <div class="input-group">
+      <input class="form-control" id="search_string" name="search_string"
+             placeholder="Search String" type="text" autofocus>
+      <button type="submit" class="btn btn-outline-primary">Search</button>
+    </div>
+  </div>
+</form>

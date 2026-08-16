@@ -1,36 +1,46 @@
 <?php
 
-    /**
-     * constants.php
-     * Global constants.
-     */
+/**
+ * constants.php
+ *
+ * Global constants.
+ *
+ * Secrets are read from the environment, never from this file. See
+ * .env.example for the full list and README.md for how to set them.
+ */
 
-    // your database's name
-    define("DATABASE", "ethicalbuy");
+/**
+ * Reads an environment variable, falling back to $default.
+ * Passing null as $default makes the variable required.
+ */
+function env($name, $default = null)
+{
+    $value = getenv($name);
 
-    // your database's password
-    define("PASSWORD", "mypassword");
+    if ($value === false || $value === "")
+    {
+        if ($default === null)
+        {
+            // fail loudly and without echoing anything sensitive
+            error_log("Missing required environment variable: $name");
+            http_response_code(500);
+            exit("Server is not configured correctly.");
+        }
 
-    // your database's server
-    define("SERVER", "localhost");
+        return $default;
+    }
 
-    // your database's username
-    define("USERNAME", "myuser");
-	
-	//smtp host name
-	//define("SMTP_HOST","smtp.yandex.com");
-	
-	//smtp user name
-	//define("SMTP_USERNAME","my_username");
-	
-	//smtp password
-	//define("SMTP_PASSWORD","my_password");
-	
-	//smtp port
-	//define("SMTP_PORT","587");
-	
-	//site_url
-	define ("SITE_URL","https://ethicalbuy.duckdns.org");
-	
+    return $value;
+}
 
-?>
+// database connection
+define("DATABASE", env("DB_NAME", "ethicalbuy"));
+define("SERVER", env("DB_HOST", "localhost"));
+define("USERNAME", env("DB_USER", "ethicalbuy"));
+define("PASSWORD", env("DB_PASSWORD"));
+
+// site
+define("SITE_URL", env("SITE_URL", "https://ethicalbuy.duckdns.org"));
+
+// set to "1" only while developing locally
+define("DEBUG", env("APP_DEBUG", "0") === "1");

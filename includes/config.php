@@ -1,26 +1,28 @@
 <?php
 
-    /**
-     * config.php
-     *
-     * Computer Science 50
-     * Problem Set 7
-     *
-     * Configures pages.
-     */
+/**
+ * config.php
+ *
+ * Configures pages.
+ */
 
-    // display errors, warnings, and notices
-    ini_set("display_errors", true);
-    error_reporting(E_ALL);
+require_once(__DIR__ . "/constants.php");
+require_once(__DIR__ . "/functions.php");
 
-    // requirements
-    require("constants.php");
-    require("functions.php");
-    //require("share_functions.php");
+// never render errors to visitors in production; always log them
+if (DEBUG)
+{
+    ini_set("display_errors", "1");
+}
+else
+{
+    ini_set("display_errors", "0");
+}
+ini_set("log_errors", "1");
+error_reporting(E_ALL);
 
-    // enable sessions
+// enable sessions
+if (session_status() === PHP_SESSION_NONE)
+{
     session_start();
-
-   
-
-?>
+}
