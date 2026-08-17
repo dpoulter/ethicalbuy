@@ -106,6 +106,14 @@ $goodRow = [
     "owner" => "Someone", "notes" => "fine", "availability" => "Shops", "rating" => 9,
 ];
 
+// real scores, not stubs, so the templates are exercised against the
+// same structure personal_score() actually produces
+function withPersonal($row, $weights = null) {
+    $weights = $weights ?? default_weights();
+    $row["personal"] = personal_score(["editorial" => $row["rating"] ?? null], $weights);
+    return $row;
+}
+
 function renderTo($template, $values) {
     ob_start();
     render($template, $values);
@@ -126,8 +134,10 @@ $out = renderTo("search.php", [
     "filters" => ["term" => $evil, "field" => "brand", "min_rating" => "7",
                   "availability" => "Tesco", "sort" => "rating_desc"],
     "submitted" => true,
-    "results" => [$evilRow, $goodRow],
+    "results" => [withPersonal($evilRow), withPersonal($goodRow)],
     "availability_options" => ["Tesco", "Co-op & \"friends\""],
+    "weights" => default_weights(),
+    "chosen" => true,
 ]);
 structureChecks("search", $out);
 check("search: payload escaped", strpos($out, '&lt;script&gt;') !== false);
@@ -144,15 +154,26 @@ $empty = renderTo("search.php", [
     "filters" => ["term" => "", "field" => "brand", "min_rating" => "",
                   "availability" => "", "sort" => "brand"],
     "submitted" => false, "results" => [], "availability_options" => [],
+    "weights" => default_weights(), "chosen" => false,
 ]);
 structureChecks("search(unsubmitted)", $empty);
 check("search: no results block before submit", strpos($empty, 'No brands matched') === false
     && strpos($empty, '<table') === false);
 
 section("brand.php template");
+$brandValues = ["editorial" => 8, "environment" => 4, "welfare" => null,
+                "nutrition" => 6, "ownership" => 2];
 $out = renderTo("brand.php", [
     "title" => $evil, "brand" => $evilRow,
-    "alternatives" => [$goodRow, array_merge($evilRow, ["brand" => "Other'Co", "rating" => 3])],
+    "alternatives" => [
+        withPersonal($goodRow),
+        withPersonal(array_merge($evilRow, ["brand" => "Other'Co", "rating" => 3])),
+    ],
+    "weights" => default_weights(),
+    "personal" => personal_score($brandValues, default_weights()),
+    "breakdown" => score_breakdown($brandValues, default_weights()),
+    "scores" => [],
+    "chosen" => true,
 ]);
 structureChecks("brand", $out);
 check("brand: title escaped in <title>", strpos($out, '<title>&lt;script&gt;') !== false);
@@ -195,13 +216,16 @@ $out = renderTo("category_form.php", [
             "brand" => $evil, "type" => "x", "notes" => "</script><script>alert(2)</script>",
             "owner" => "y", "availability" => "z",
             "ratingClass" => "danger", "ratingScore" => "2/10", "ratingLabel" => "Avoid",
+            "editorial" => "2/10", "thin" => false,
         ]],
         "Dairy" => [[
             "brand" => "Clean Co", "type" => "Milk", "notes" => null,
             "owner" => "Someone", "availability" => "Shops",
             "ratingClass" => "", "ratingScore" => "Not rated", "ratingLabel" => "",
+            "editorial" => "Not rated", "thin" => true,
         ]],
     ],
+    "chosen" => true,
 ]);
 structureChecks("categories", $out);
 preg_match('~<script type="application/json" id="brandsData">(.*?)</script>~s', $out, $bd);
@@ -522,6 +546,117 @@ check("owners: csrf present", substr_count($out, 'name="csrf_token"') >= 2);
 check("owners: match note shown", strpos($out, 'share that exact name') !== false);
 check("owners: OGL attribution present", strpos($out, 'Open Government Licence v3.0') !== false);
 check("owners: confirmed company linked", strpos($out, '/company/00445790') !== false);
+
+section("weights parsing (never trust the cookie)");
+check("empty -> defaults", parse_weights("") === default_weights());
+check("null -> defaults", parse_weights(null) === default_weights());
+check("array -> defaults", parse_weights(["x"]) === default_weights());
+$w = parse_weights("environment=5&nutrition=0");
+check("parses a set value", $w["environment"] === 5);
+check("parses zero", $w["nutrition"] === 0);
+check("unset keys keep default", $w["welfare"] === WEIGHT_DEFAULT);
+check("clamps above max", parse_weights("environment=99")["environment"] === WEIGHT_MAX);
+check("clamps below min", parse_weights("environment=-5")["environment"] === WEIGHT_MIN);
+check("ignores unknown dimension", !array_key_exists("evil", parse_weights("evil=5")));
+check("ignores non-numeric", parse_weights("environment=abc")["environment"] === WEIGHT_DEFAULT);
+check("ignores array value", parse_weights("environment[]=5")["environment"] === WEIGHT_DEFAULT);
+check("round-trips through encode",
+    parse_weights(encode_weights(["environment" => 5, "welfare" => 0]))["environment"] === 5);
+
+section("personal_score");
+$full = ["editorial" => 8, "environment" => 4, "nutrition" => 6, "welfare" => 10, "ownership" => 2];
+
+$equal = personal_score($full, array_fill_keys(array_keys(score_dimensions()), 3));
+check("equal weights = plain mean", $equal["score"] === 6.0);
+check("equal weights: nothing missing", $equal["missing"] === []);
+check("equal weights: full coverage", $equal["coverage"] === 1.0);
+check("equal weights: confident", $equal["confident"] === true);
+
+$vegan = personal_score($full, ["welfare" => 5, "editorial" => 1, "environment" => 1,
+                                "nutrition" => 1, "ownership" => 1]);
+check("welfare-led score is higher", $vegan["score"] > $equal["score"]);
+
+$climate = personal_score($full, ["environment" => 5, "editorial" => 1, "nutrition" => 1,
+                                  "welfare" => 1, "ownership" => 1]);
+check("climate-led score is lower", $climate["score"] < $equal["score"]);
+check("same facts, different people, different answers", $vegan["score"] !== $climate["score"]);
+
+// weight 0 must remove a dimension entirely
+$ignored = personal_score($full, ["welfare" => 0, "editorial" => 3, "environment" => 3,
+                                  "nutrition" => 3, "ownership" => 3]);
+check("weight 0 excludes the dimension", !in_array("welfare", $ignored["covered"], true));
+check("weight 0 is not counted as missing", !in_array("welfare", $ignored["missing"], true));
+check("weight 0 changes the average", $ignored["score"] === 5.0);
+
+// missing data must never be treated as zero
+$partial = ["editorial" => 8, "environment" => null];
+$m = personal_score($partial, ["editorial" => 3, "environment" => 3]);
+check("missing dimension excluded, not zeroed", $m["score"] === 8.0);
+check("missing dimension is reported", $m["missing"] === ["environment"]);
+check("coverage halves", $m["coverage"] === 0.5);
+
+$mostlyMissing = personal_score(["editorial" => 8], ["editorial" => 1, "environment" => 5]);
+check("thin coverage flagged", $mostlyMissing["confident"] === false);
+check("thin coverage still scores", $mostlyMissing["score"] === 8.0);
+
+$nothing = personal_score(["editorial" => null], ["editorial" => 3]);
+check("no data -> null score, not 0", $nothing["score"] === null);
+check("no data -> zero coverage", $nothing["coverage"] === 0.0);
+
+$allIgnored = personal_score($full, array_fill_keys(array_keys(score_dimensions()), 0));
+check("all ignored -> null score", $allIgnored["score"] === null);
+check("all ignored -> nothing missing", $allIgnored["missing"] === []);
+
+check("string scores accepted (DECIMAL from PDO)",
+    personal_score(["editorial" => "8.0"], ["editorial" => 3])["score"] === 8.0);
+check("empty-string score treated as missing",
+    personal_score(["editorial" => ""], ["editorial" => 3])["score"] === null);
+
+section("score_breakdown");
+$rows = score_breakdown($full, ["editorial" => 3, "environment" => 0, "nutrition" => 3,
+                                "welfare" => 3, "ownership" => 3]);
+check("one row per dimension", count($rows) === count(score_dimensions()));
+check("breakdown keeps display order", $rows[0]["key"] === "editorial");
+$env = array_values(array_filter($rows, function ($r) { return $r["key"] === "environment"; }))[0];
+check("zero-weighted row not counted", $env["counted"] === false);
+check("zero-weighted row still shows its score", $env["score"] === 4.0);
+
+section("OFF derived dimension scores");
+check("grade a -> 10", off_grade_to_score("a") === 10.0);
+check("grade e -> 2", off_grade_to_score("e") === 2.0);
+check("uppercase grade works", off_grade_to_score("B") === 8.0);
+check("unknown grade -> null", off_grade_to_score("unknown") === null);
+check("not-applicable -> null", off_grade_to_score("not-applicable") === null);
+check("null grade -> null", off_grade_to_score(null) === null);
+check("no labels -> welfare unassessed", off_welfare_score([]) === null);
+check("unrecognised labels -> unassessed", off_welfare_score(["en:nonsense"]) === null);
+check("vegan raises welfare", off_welfare_score(["en:vegan"]) === 7.0);
+check("welfare never exceeds 10",
+    off_welfare_score(["en:vegan","en:organic","en:cruelty-free","en:rspca-assured",
+                       "en:soil-association-organic"]) === 10.0);
+check("welfare never drops below 5", off_welfare_score(["en:vegetarian"]) >= 5.0);
+
+$scored = map_off_product([
+    "code" => "1", "brands" => "Graded Co", "countries_tags" => ["en:united-kingdom"],
+    "ecoscore_grade" => "b", "nutriscore_grade" => "d", "labels_tags" => ["en:vegan"],
+]);
+check("product carries dimension scores", $scored["scores"]["environment"] === 8.0);
+check("nutriscore mapped", $scored["scores"]["nutrition"] === 4.0);
+check("welfare derived", $scored["scores"]["welfare"] === 7.0);
+
+$newName = map_off_product([
+    "code" => "2", "brands" => "New Name Co", "countries_tags" => ["en:united-kingdom"],
+    "environmental_score_grade" => "a",
+]);
+check("accepts the renamed environmental_score_grade", $newName["scores"]["environment"] === 10.0);
+check("absent grades are simply absent",
+    !array_key_exists("nutrition", $newName["scores"]));
+
+$avg = collapse_off_products([
+    ["code"=>"1","brands"=>"Avg Co","countries_tags"=>["en:united-kingdom"],"ecoscore_grade"=>"a"],
+    ["code"=>"2","brands"=>"Avg Co","countries_tags"=>["en:united-kingdom"],"ecoscore_grade"=>"c"],
+]);
+check("brand score averages across products", $avg[0]["scores"]["environment"] === 8.0);
 
 echo $fails === 0 ? "\nALL PASS\n" : "\n$fails FAILURE(S)\n";
 exit($fails === 0 ? 0 : 1);

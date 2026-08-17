@@ -19,6 +19,9 @@
       <div class="navbar-nav ms-auto">
         <a class="nav-link btn btn-outline-primary me-2" href="/index.php">Home</a>
         <a class="nav-link btn btn-outline-primary me-2" href="/search.php">Product Search</a>
+        <a class="nav-link btn btn-outline-primary me-2" href="/priorities.php">
+          <?= has_chosen_priorities() ? "Your Priorities &#10003;" : "Your Priorities" ?>
+        </a>
         <a class="nav-link btn btn-outline-primary me-2" href="/about.php">About</a>
         <a class="nav-link btn btn-outline-primary" href="/contact.php">Contact</a>
       </div>

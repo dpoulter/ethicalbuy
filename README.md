@@ -103,7 +103,59 @@ mysql -u root -p ethicalbuy < migrations/001_contact_messages.sql
 `001_contact_messages.sql` creates the table behind the contact form. **The
 contact page will report a save failure until it is applied.**
 
-### Ratings
+## Personalised ratings
+
+Ethics aren't one number. A reader focused on climate wants carbon weighted
+heavily; a vegan wants animal welfare to dominate; someone avoiding processed
+food cares about nutrition. So a brand carries a score per **dimension**, and
+the number shown is those dimensions weighted by priorities the reader sets on
+`/priorities.php`.
+
+| Dimension | Where its score comes from |
+| --- | --- |
+| Our overall view | `brands.rating`, written by you in `/admin` |
+| Environment & carbon | Eco-Score / Green-Score via Open Food Facts |
+| Nutrition | Nutri-Score via Open Food Facts |
+| Diet & animal welfare | Open Food Facts label tags |
+| Ownership & business size | Curated in `/admin/scores.php` |
+
+The same data ranks differently for different people. In the sample data
+Café Verde scores **4.8/10** for a climate-first reader and **7.8/10** for a
+vegan; Amber Mill inverts it at **6.5** and **4.1**.
+
+### Two rules the engine enforces
+
+**Unknown is not zero.** A brand with no carbon data is not a brand with bad
+carbon data. Missing dimensions are excluded from the weighted average, never
+counted as zero, and never silently. Leave a score blank in `/admin/scores.php`
+and it means "not assessed", which is a different claim from a low score.
+
+**The reader is told what the score is missing.** `personal_score()` returns
+the fraction of requested weight it could actually assess. Below 50% the page
+says so in plain terms, so `8.2/10` never hides that it ignored the one thing
+the reader cared about most.
+
+A dimension weighted **Ignore** is dropped entirely: the reader said it doesn't
+matter, so its absence isn't a gap either.
+
+### Where it runs, and why
+
+Scoring happens **server-side, in PHP, once**. Priorities live in a
+first-party cookie holding five small integers.
+
+That is a deliberate choice on both counts. Re-implementing the weighting in
+JavaScript is how this site originally ended up with two copies of its rating
+logic that disagreed — see `rating_class()` below. And a cookie means no
+account, no password, no server-side profile, and nothing personal stored: no
+GDPR duty and no consent banner, since a functional preference cookie the user
+asked for is exempt under PECR. Accounts can be layered on later without
+touching the engine.
+
+`/admin/scores.php` edits the per-dimension scores. The editorial rating stays
+on the brand form and is injected as its own dimension at read time rather than
+copied, so the two can never drift.
+
+### Rating colours
 
 `rating_class()` in `includes/functions.php` is the single source of truth for
 rating colours. `index.php` computes the class server-side and passes it to the
@@ -348,7 +400,7 @@ question directly, and ownership is what most users are actually asking about.
 php tests/smoke.php
 ```
 
-240 assertions covering the helpers, the search builder's whitelisting, admin
+310 assertions covering the helpers, the search builder's whitelisting, admin
 validation, and every template rendered with hostile input (script payloads in
 every field, quotes and apostrophes in names, `</script>` in free text). It
 exits non-zero on failure, so it drops straight into CI. Most of it needs no

@@ -61,6 +61,8 @@
             <td class="text-end text-nowrap">
               <a class="btn btn-sm btn-outline-primary"
                  href="/admin/edit.php?id=<?= (int) $row["id"] ?>">Edit</a>
+              <a class="btn btn-sm btn-outline-secondary"
+                 href="/admin/scores.php?id=<?= (int) $row["id"] ?>">Scores</a>
               <a class="btn btn-sm btn-outline-danger"
                  href="/admin/delete.php?id=<?= (int) $row["id"] ?>">Delete</a>
             </td>

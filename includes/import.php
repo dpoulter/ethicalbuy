@@ -108,6 +108,69 @@ function clean_value($value, $max = 255)
 }
 
 /**
+ * Open Food Facts publishes A-E letter grades for environmental impact
+ * (Eco-Score / Green-Score) and nutrition (Nutri-Score). Map them onto the
+ * site's 1-10 scale. Anything else, including "unknown" and "not-applicable",
+ * returns null so it is recorded as not assessed rather than as a bad score.
+ */
+function off_grade_to_score($grade)
+{
+    $grades = ["a" => 10.0, "b" => 8.0, "c" => 6.0, "d" => 4.0, "e" => 2.0];
+
+    if (!is_string($grade))
+    {
+        return null;
+    }
+
+    return $grades[strtolower(trim($grade))] ?? null;
+}
+
+/**
+ * Labels that speak to diet and animal welfare, and what each is worth.
+ *
+ * A brand with none of these is NOT scored zero -- it is left unassessed,
+ * because an absent label means Open Food Facts has no record, not that the
+ * brand fails. Only a product carrying at least one recognised label produces
+ * a welfare score.
+ */
+function off_welfare_labels()
+{
+    return [
+        "en:organic" => 1.5, "en:eu-organic" => 1.5, "en:soil-association-organic" => 2.0,
+        "en:vegan" => 2.0, "en:vegetarian" => 1.0, "en:cruelty-free" => 2.0,
+        "en:rspca-assured" => 2.0, "en:red-tractor" => 1.0,
+        "en:marine-stewardship-council" => 1.5, "en:rainforest-alliance" => 1.0,
+        "en:fairtrade" => 1.0, "en:fair-trade" => 1.0,
+    ];
+}
+
+/**
+ * Derives a 1-10 welfare score from a product's labels, or null when the
+ * product carries none we recognise.
+ *
+ * Starts from a neutral 5 and adds credit for each recognised label, capped
+ * at 10. Deliberately cannot go below 5: a label's absence is missing
+ * evidence, never evidence of harm.
+ */
+function off_welfare_score($labels)
+{
+    $known = off_welfare_labels();
+    $credit = 0.0;
+    $matched = false;
+
+    foreach ((array) $labels as $tag)
+    {
+        if (is_string($tag) && isset($known[$tag]))
+        {
+            $credit += $known[$tag];
+            $matched = true;
+        }
+    }
+
+    return $matched ? min(10.0, 5.0 + $credit) : null;
+}
+
+/**
  * Maps one Open Food Facts product into the fields the brands table holds.
  *
  * Returns null when the product cannot be used -- no brand name, or not sold
@@ -194,6 +257,17 @@ function map_off_product($product, $country = "en:united-kingdom")
 
     $code = clean_value($product["code"] ?? null, 100);
 
+    // per-dimension scores, so a reader can weight them themselves.
+    // "environmental_score_grade" is the newer name for "ecoscore_grade";
+    // accept either so a rename upstream does not silently drop the data.
+    $dimension_scores = array_filter([
+        "environment" => off_grade_to_score(
+            $product["environmental_score_grade"] ?? $product["ecoscore_grade"] ?? null
+        ),
+        "nutrition"   => off_grade_to_score($product["nutriscore_grade"] ?? null),
+        "welfare"     => off_welfare_score($product["labels_tags"] ?? []),
+    ], function ($v) { return $v !== null; });
+
     return [
         "name"           => $brand,
         "category"       => $category === null ? null : mb_substr($category, 0, 100),
@@ -208,6 +282,7 @@ function map_off_product($product, $country = "en:united-kingdom")
             ? OFF_CANONICAL
             : OFF_CANONICAL . "/product/" . rawurlencode($code),
         "source_licence" => OFF_LICENCE,
+        "scores"         => $dimension_scores,
     ];
 }
 
@@ -220,6 +295,7 @@ function map_off_product($product, $country = "en:united-kingdom")
 function collapse_off_products($products, $country = "en:united-kingdom")
 {
     $brands = [];
+    $samples = [];
 
     foreach ($products as $product)
     {
@@ -234,16 +310,46 @@ function collapse_off_products($products, $country = "en:united-kingdom")
         if (!isset($brands[$key]))
         {
             $brands[$key] = $mapped;
+
+            foreach ($mapped["scores"] as $dimension => $value)
+            {
+                $samples[$key][$dimension][] = $value;
+            }
+
             continue;
         }
 
         foreach ($mapped as $field => $value)
         {
+            if ($field === "scores")
+            {
+                continue;
+            }
+
             if (($brands[$key][$field] ?? null) === null && $value !== null)
             {
                 $brands[$key][$field] = $value;
             }
         }
+
+        // dimension scores accumulate across every product of the brand
+        foreach ($mapped["scores"] as $dimension => $value)
+        {
+            $samples[$key][$dimension][] = $value;
+        }
+    }
+
+    // a brand's score for a dimension is the mean across its products
+    foreach ($brands as $key => $_)
+    {
+        $averaged = [];
+
+        foreach ($samples[$key] ?? [] as $dimension => $values)
+        {
+            $averaged[$dimension] = round(array_sum($values) / count($values), 1);
+        }
+
+        $brands[$key]["scores"] = $averaged;
     }
 
     return array_values($brands);

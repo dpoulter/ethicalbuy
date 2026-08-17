@@ -12,7 +12,10 @@
     </select>
   </div>
   <div class="col-md-6">
-    <a class="btn btn-outline-primary" href="search.php">Search all brands</a>
+    <a class="btn btn-outline-primary" href="/search.php">Search all brands</a>
+    <a class="btn btn-outline-secondary" href="/priorities.php">
+      <?= $chosen ? "Your priorities" : "Set your priorities" ?>
+    </a>
   </div>
 </div>
 
@@ -44,6 +47,7 @@
     span.textContent = b.ratingLabel
       ? b.ratingScore + ' · ' + b.ratingLabel
       : b.ratingScore;
+    if (b.thin) { span.title = 'Based on only part of what you said matters'; }
     return span;
   }
 
@@ -64,6 +68,7 @@
     head.appendChild(ratingBadge(b));
     li.appendChild(head);
 
+    li.appendChild(field('Our overall view', b.editorial));
     li.appendChild(field('Type', b.type));
     li.appendChild(field('Owner', b.owner));
     li.appendChild(field('Availability', b.availability));

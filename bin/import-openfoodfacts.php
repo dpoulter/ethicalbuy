@@ -132,7 +132,9 @@ function build_search_url($category, $brand, $page)
 {
     // ask only for the fields we map, to keep the response small
     $fields = "code,product_name,brands,brands_tags,categories_tags," .
-              "countries_tags,labels_tags,stores,stores_tags";
+              "countries_tags,labels_tags,stores,stores_tags," .
+              // both spellings: "environmental_score_grade" is the newer name
+              "ecoscore_grade,environmental_score_grade,nutriscore_grade";
 
     $params = [
         "fields"    => $fields,
@@ -196,6 +198,60 @@ function resolve_category($name, $apply)
 }
 
 /**
+ * Writes derived dimension scores, without ever clobbering a curated one.
+ *
+ * A score a human set in /admin wins over anything derived. Only scores this
+ * importer previously wrote are refreshed.
+ */
+function save_dimension_scores($brand_id, $scores, $source_url, $apply, &$notes)
+{
+    foreach ($scores as $dimension => $value)
+    {
+        $existing = query(
+            "SELECT source FROM brand_scores WHERE brand_id = ? AND dimension = ?",
+            $brand_id, $dimension
+        );
+
+        if ($existing === false)
+        {
+            $notes[] = "could not read $dimension score";
+            return false;
+        }
+
+        if (!empty($existing) && ($existing[0]["source"] ?? "") !== OFF_SOURCE)
+        {
+            $notes[] = "kept curated $dimension";
+            continue;
+        }
+
+        if (!$apply)
+        {
+            $notes[] = "$dimension=" . $value;
+            continue;
+        }
+
+        $ok = query(
+            "INSERT INTO brand_scores
+                 (brand_id, dimension, score, note, source, source_url, retrieved_at)
+             VALUES (?, ?, ?, ?, ?, ?, NOW())
+             ON DUPLICATE KEY UPDATE score = VALUES(score), note = VALUES(note),
+                 source = VALUES(source), source_url = VALUES(source_url),
+                 retrieved_at = VALUES(retrieved_at)",
+            $brand_id, $dimension, $value,
+            "Derived from Open Food Facts", OFF_SOURCE, $source_url
+        );
+
+        if ($ok === false)
+        {
+            $notes[] = "could not save $dimension score";
+            return false;
+        }
+    }
+
+    return true;
+}
+
+/**
  * Inserts a brand, or fills in only the blanks on an existing one.
  * Returns one of: "created", "filled", "unchanged", "failed".
  */
@@ -243,11 +299,32 @@ function upsert_brand($b, $apply, &$notes)
             $b["source"], $b["source_ref"], $b["source_url"], $b["source_licence"]
         );
 
-        return $ok === false ? "failed" : "created";
+        if ($ok === false)
+        {
+            return "failed";
+        }
+
+        $fresh = query("SELECT id FROM brands WHERE name = ? LIMIT 1", $b["name"]);
+        $new_id = empty($fresh) ? null : (int) $fresh[0]["id"];
+
+        if ($new_id !== null && !empty($b["scores"]))
+        {
+            save_dimension_scores($new_id, $b["scores"], $b["source_url"], $apply, $notes);
+        }
+
+        return "created";
     }
 
     // ---- existing brand: only ever fill blanks
     $row = $existing[0];
+
+    // dimension scores are refreshed even when the brand's own fields are
+    // already filled in, since they carry their own provenance
+    if (!empty($b["scores"]))
+    {
+        save_dimension_scores((int) $row["id"], $b["scores"], $b["source_url"], $apply, $notes);
+    }
+
     $sets = [];
     $params = [];
 
@@ -271,7 +348,7 @@ function upsert_brand($b, $apply, &$notes)
 
     if (!$sets)
     {
-        return "unchanged";
+        return $notes ? "filled" : "unchanged";
     }
 
     if (!$apply)

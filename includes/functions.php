@@ -429,8 +429,8 @@ function log_job($job_name)
     query("INSERT INTO jobs (job_name) VALUES (?)", $job_name);
 }
 
-// columns for lists and search
-define("BRAND_COLUMNS", "brand, category, type, owner, notes, availability, rating");
+// columns for lists and search. brand_id is needed to attach dimension scores.
+define("BRAND_COLUMNS", "brand_id, brand, category, type, owner, notes, availability, rating");
 
 // the detail page additionally shows certifications, the owner's registered
 // identity, and cites its sources.
@@ -445,6 +445,9 @@ const SEARCH_FIELDS = ["brand", "category", "type", "owner"];
 const SEARCH_SORTS = [
     "relevance"   => "brand ASC",
     "brand"       => "brand ASC",
+    // personalised ranking depends on the reader's weights, so it cannot be
+    // done in SQL. The controller re-sorts in PHP after scoring.
+    "personal"    => "brand ASC",
     "category"    => "category ASC, brand ASC",
     "rating_desc" => "rating IS NULL, rating DESC, brand ASC",
     "rating_asc"  => "rating IS NULL, rating ASC, brand ASC",
@@ -814,6 +817,145 @@ function admin_update_brand($id, $data)
 function admin_delete_brand($id)
 {
     return query("DELETE FROM brands WHERE id = ?", $id) !== false;
+}
+
+/* ------------------------------------------------------------------ *
+ * Dimension scores
+ * ------------------------------------------------------------------ */
+
+/**
+ * Full score rows for one brand, keyed by dimension.
+ * Requires migrations/004_brand_scores.sql.
+ */
+function get_brand_scores($brand_id)
+{
+    $rows = query(
+        "SELECT dimension, score, note, source, source_url, retrieved_at
+           FROM brand_scores
+          WHERE brand_id = ?",
+        $brand_id
+    );
+
+    if ($rows === false)
+    {
+        return [];
+    }
+
+    $out = [];
+    foreach ($rows as $row)
+    {
+        $out[$row["dimension"]] = $row;
+    }
+
+    return $out;
+}
+
+/**
+ * Scores for many brands at once, as [brand_id => [dimension => score]].
+ * One query rather than one per row.
+ */
+function get_scores_for_brands($brand_ids)
+{
+    $brand_ids = array_values(array_unique(array_filter($brand_ids, "is_numeric")));
+
+    if (!$brand_ids)
+    {
+        return [];
+    }
+
+    // placeholder count comes from the array size, never from user input
+    $placeholders = implode(",", array_fill(0, count($brand_ids), "?"));
+
+    $rows = query(
+        "SELECT brand_id, dimension, score
+           FROM brand_scores
+          WHERE brand_id IN ($placeholders)",
+        ...$brand_ids
+    );
+
+    if ($rows === false)
+    {
+        return [];
+    }
+
+    $out = [];
+    foreach ($rows as $row)
+    {
+        $out[(int) $row["brand_id"]][$row["dimension"]] = $row["score"];
+    }
+
+    return $out;
+}
+
+/**
+ * Builds the [dimension => score] map the scoring engine expects.
+ *
+ * The editorial dimension is injected from brands.rating rather than stored
+ * twice, so editing a rating in /admin can never disagree with the score
+ * shown on the site.
+ */
+function brand_score_values($brand_row, $stored)
+{
+    $values = ["editorial" => $brand_row["rating"] ?? null];
+
+    foreach ((array) $stored as $dimension => $entry)
+    {
+        $values[$dimension] = is_array($entry) ? ($entry["score"] ?? null) : $entry;
+    }
+
+    return $values;
+}
+
+/**
+ * Attaches a personalised score to each row of a result set.
+ * Returns the rows with "personal" added.
+ */
+function attach_personal_scores($rows, $weights)
+{
+    if (!$rows)
+    {
+        return [];
+    }
+
+    $scores = get_scores_for_brands(array_column($rows, "brand_id"));
+
+    foreach ($rows as $i => $row)
+    {
+        $values = brand_score_values($row, $scores[(int) $row["brand_id"]] ?? []);
+        $rows[$i]["personal"] = personal_score($values, $weights);
+    }
+
+    return $rows;
+}
+
+/**
+ * Replaces one brand's score for a dimension. Returns true on success.
+ */
+function admin_save_brand_score($brand_id, $dimension, $score, $note)
+{
+    if (!in_array($dimension, stored_dimensions(), true))
+    {
+        return false;
+    }
+
+    return query(
+        "INSERT INTO brand_scores (brand_id, dimension, score, note, source, retrieved_at)
+              VALUES (?, ?, ?, ?, 'curated', NOW())
+         ON DUPLICATE KEY UPDATE score = VALUES(score), note = VALUES(note),
+                                 source = VALUES(source), retrieved_at = VALUES(retrieved_at)",
+        $brand_id, $dimension, $score, $note
+    ) !== false;
+}
+
+/**
+ * Removes a dimension score, returning it to "we don't know".
+ */
+function admin_delete_brand_score($brand_id, $dimension)
+{
+    return query(
+        "DELETE FROM brand_scores WHERE brand_id = ? AND dimension = ?",
+        $brand_id, $dimension
+    ) !== false;
 }
 
 /**

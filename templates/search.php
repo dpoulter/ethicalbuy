@@ -50,6 +50,7 @@
       <select class="form-select" id="sort" name="sort">
         <?php
           $sort_labels = [
+              "personal"    => "Best for your priorities",
               "brand"       => "Brand (A-Z)",
               "category"    => "Category",
               "rating_desc" => "Best rated first",
@@ -98,7 +99,8 @@
       <table class="table align-middle" id="tbl">
         <thead>
           <tr>
-            <th>Rating</th>
+            <th><?= $chosen ? "Your rating" : "Balanced" ?></th>
+            <th>Our view</th>
             <th>Brand</th>
             <th>Category</th>
             <th>Type</th>
@@ -109,8 +111,15 @@
         </thead>
         <tbody>
           <?php foreach ($results as $result): ?>
-            <?php $class = rating_class($result["rating"]); ?>
+            <?php $class = rating_class($result["personal"]["score"]); ?>
             <tr<?= $class === "" ? "" : ' class="table-' . $class . '"' ?>>
+              <td>
+                <?php
+                  $personal = $result["personal"];
+                  $personal_compact = true;
+                  require(TEMPLATE_DIR . "/partials/personal_score.php");
+                ?>
+              </td>
               <td><?php $rating = $result["rating"]; require(TEMPLATE_DIR . "/partials/rating_badge.php"); ?></td>
               <td>
                 <a href="brand.php?brand=<?= urlencode($result["brand"]) ?>">

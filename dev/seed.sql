@@ -143,3 +143,51 @@ INSERT INTO brands (name, category_id, owner_id, type, notes, availability, rati
      'Assorted',
      'No category, no owner and no rating: the emptiest row the UI has to survive.',
      NULL, NULL);
+
+-- Dimension scores. Deliberately incomplete: several brands are scored on
+-- only some dimensions, and two on none at all, so the coverage warnings and
+-- the "not assessed" path are exercised rather than assumed.
+INSERT INTO brand_scores (brand_id, dimension, score, note, source) VALUES
+    ((SELECT id FROM brands WHERE name='Valley Fresh'), 'environment', 8.0, 'Local sourcing, returnable glass.', 'curated'),
+    ((SELECT id FROM brands WHERE name='Valley Fresh'), 'welfare', 9.5, 'Pasture-based, audited welfare.', 'curated'),
+    ((SELECT id FROM brands WHERE name='Valley Fresh'), 'nutrition', 6.0, 'Whole milk range.', 'curated'),
+    ((SELECT id FROM brands WHERE name='Valley Fresh'), 'ownership', 10.0, 'Co-operatively owned.', 'curated'),
+
+    ((SELECT id FROM brands WHERE name='Greenfields Organic'), 'environment', 10.0, 'Certified organic, seasonal.', 'curated'),
+    ((SELECT id FROM brands WHERE name='Greenfields Organic'), 'welfare', 9.0, 'Organic standards.', 'curated'),
+    ((SELECT id FROM brands WHERE name='Greenfields Organic'), 'nutrition', 9.0, 'Unprocessed produce.', 'curated'),
+    ((SELECT id FROM brands WHERE name='Greenfields Organic'), 'ownership', 9.0, 'Co-operative, profit share to growers.', 'curated'),
+
+    -- strong on diet, weak on carbon: ranks very differently by priority
+    ((SELECT id FROM brands WHERE name='Café Verde'), 'welfare', 9.0, 'Vegan range, Rainforest Alliance.', 'curated'),
+    ((SELECT id FROM brands WHERE name='Café Verde'), 'environment', 3.0, 'Air-freighted, high water use.', 'curated'),
+    ((SELECT id FROM brands WHERE name='Café Verde'), 'nutrition', 8.0, 'Whole fruit.', 'curated'),
+
+    -- the mirror image: low welfare, good carbon
+    ((SELECT id FROM brands WHERE name='Amber Mill'), 'environment', 8.5, 'Low-impact milling, plastic reduced.', 'curated'),
+    ((SELECT id FROM brands WHERE name='Amber Mill'), 'welfare', 3.0, 'No welfare certification.', 'curated'),
+    ((SELECT id FROM brands WHERE name='Amber Mill'), 'nutrition', 7.0, 'Wholegrain range.', 'curated'),
+    ((SELECT id FROM brands WHERE name='Amber Mill'), 'ownership', 2.0, 'Owned by a large group.', 'curated'),
+
+    ((SELECT id FROM brands WHERE name='Creamery Gold'), 'environment', 3.0, 'High-intensity dairy.', 'curated'),
+    ((SELECT id FROM brands WHERE name='Creamery Gold'), 'nutrition', 2.0, 'High saturated fat.', 'curated'),
+    ((SELECT id FROM brands WHERE name='Creamery Gold'), 'ownership', 2.0, 'Large listed parent.', 'curated'),
+
+    ((SELECT id FROM brands WHERE name='Little Meadow'), 'welfare', 8.0, 'Organic ingredients.', 'curated'),
+    ((SELECT id FROM brands WHERE name='Little Meadow'), 'nutrition', 9.0, 'No added sugar or salt.', 'curated'),
+    ((SELECT id FROM brands WHERE name='Little Meadow'), 'ownership', 9.0, 'Co-operatively owned.', 'curated'),
+
+    ((SELECT id FROM brands WHERE name='Brightwash'), 'environment', 7.0, 'Concentrated refills.', 'curated'),
+    ((SELECT id FROM brands WHERE name='Brightwash'), 'welfare', 4.0, 'Animal testing policy unclear.', 'curated'),
+
+    ((SELECT id FROM brands WHERE name='Rootstock & Vine'), 'environment', 7.0, 'Improving water stewardship.', 'curated'),
+    ((SELECT id FROM brands WHERE name='Rootstock & Vine'), 'ownership', 8.0, 'Small independent supplier.', 'curated'),
+
+    ((SELECT id FROM brands WHERE name='Saltmarsh Pantry'), 'nutrition', 6.0, 'Mixed range, some high salt.', 'curated'),
+    ((SELECT id FROM brands WHERE name='Saltmarsh Pantry'), 'ownership', 4.0, 'Mid-size group.', 'curated'),
+
+    ((SELECT id FROM brands WHERE name='Baby''s Own'), 'nutrition', 5.0, 'Meets compositional standards.', 'curated'),
+    ((SELECT id FROM brands WHERE name='Baby''s Own'), 'ownership', 1.0, 'Large multinational parent.', 'curated'),
+
+    ((SELECT id FROM brands WHERE name='Ironbridge Preserves'), 'ownership', 7.0, 'Independent, ownership under review.', 'curated'),
+    ((SELECT id FROM brands WHERE name='Sunburst Citrus'), 'ownership', 2.0, 'Large multinational parent.', 'curated');

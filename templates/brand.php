@@ -16,7 +16,12 @@
   <div class="card-body">
     <div class="d-flex justify-content-between align-items-start flex-wrap gap-2">
       <h3 class="card-title mb-0"><?= e($brand["brand"]) ?></h3>
-      <?php $rating = $brand["rating"]; require(TEMPLATE_DIR . "/partials/rating_badge.php"); ?>
+      <div class="text-end">
+        <div class="small text-muted mb-1">
+          <?= $chosen ? "Your rating" : "Balanced rating" ?>
+        </div>
+        <?php require(TEMPLATE_DIR . "/partials/personal_score.php"); ?>
+      </div>
     </div>
 
     <dl class="row mt-3 mb-0">
@@ -89,6 +94,71 @@
   </div>
 </div>
 
+<div class="card mb-4">
+  <div class="card-body">
+    <h5 class="card-title">Why this score</h5>
+    <p class="text-muted small">
+      <?php if ($chosen): ?>
+        Weighted by the priorities you set.
+        <a href="/priorities.php">Change them</a>.
+      <?php else: ?>
+        Everything weighted equally, because you haven't set priorities yet.
+        <a href="/priorities.php">Tell us what matters to you</a> and this
+        recalculates.
+      <?php endif ?>
+    </p>
+
+    <div class="table-responsive">
+      <table class="table table-sm align-middle mb-0">
+        <thead>
+          <tr>
+            <th>Dimension</th>
+            <th>Your weighting</th>
+            <th>This brand</th>
+            <th>Source</th>
+          </tr>
+        </thead>
+        <tbody>
+          <?php foreach ($breakdown as $row): ?>
+            <tr<?= $row["counted"] ? "" : ' class="text-muted"' ?>>
+              <td><?= e($row["label"]) ?></td>
+              <td>
+                <?= e(weight_label($row["weight"])) ?>
+                <?php if ($row["weight"] === 0): ?>
+                  <span class="small">(excluded)</span>
+                <?php endif ?>
+              </td>
+              <td>
+                <?php if ($row["score"] === null): ?>
+                  <span class="badge text-bg-light border">Not assessed</span>
+                <?php else: ?>
+                  <?php $rating = $row["score"]; require(TEMPLATE_DIR . "/partials/rating_badge.php"); ?>
+                <?php endif ?>
+              </td>
+              <td class="small"><?= e($row["sourced"]) ?></td>
+            </tr>
+          <?php endforeach ?>
+        </tbody>
+      </table>
+    </div>
+
+    <?php if ($personal["missing"]): ?>
+      <p class="small <?= $personal["confident"] ? "text-muted" : "text-danger" ?> mt-3 mb-0">
+        <?php if (!$personal["confident"]): ?>
+          <strong>Treat this score with caution.</strong>
+          We could only assess <?= (int) round($personal["coverage"] * 100) ?>%
+          of what you said matters. Missing data is left out of the average
+          rather than guessed, so the number above reflects less than you asked
+          for.
+        <?php else: ?>
+          We don't hold data for every dimension you care about. Missing ones
+          are excluded from the average rather than counted as zero.
+        <?php endif ?>
+      </p>
+    <?php endif ?>
+  </div>
+</div>
+
 <?php require(TEMPLATE_DIR . "/partials/rating_legend.php"); ?>
 
 <?php if (!empty($alternatives)): ?>
@@ -97,7 +167,7 @@
 
   <ul class="list-group mb-4">
     <?php foreach ($alternatives as $alt): ?>
-      <?php $alt_class = rating_class($alt["rating"]); ?>
+      <?php $alt_class = rating_class($alt["personal"]["score"]); ?>
       <li class="list-group-item<?= $alt_class === "" ? "" : " list-group-item-" . $alt_class ?>">
         <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
           <div>
@@ -108,7 +178,11 @@
               <span class="text-muted">&middot; <?= e($alt["type"]) ?></span>
             <?php endif ?>
           </div>
-          <?php $rating = $alt["rating"]; require(TEMPLATE_DIR . "/partials/rating_badge.php"); ?>
+          <?php
+            $personal = $alt["personal"];
+            $personal_compact = true;
+            require(TEMPLATE_DIR . "/partials/personal_score.php");
+          ?>
         </div>
       </li>
     <?php endforeach ?>

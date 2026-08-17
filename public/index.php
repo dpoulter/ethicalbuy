@@ -15,6 +15,9 @@ if (!$rows)
     apologize("No brand categories found.");
 }
 
+$weights = current_weights();
+$rows = attach_personal_scores($rows, $weights);
+
 // group brands by category
 $categories = [];
 foreach ($rows as $row)
@@ -30,11 +33,22 @@ foreach ($rows as $row)
         "owner" => $row["owner"],
         "availability" => $row["availability"],
 
-        // decided server-side so PHP and JS can't disagree about ratings
-        "ratingClass" => rating_class($row["rating"]),
-        "ratingScore" => rating_score($row["rating"]),
-        "ratingLabel" => rating_class($row["rating"]) === "" ? "" : rating_label($row["rating"]),
+        // scored server-side so PHP and JS can't disagree, and so the
+        // personalised weighting exists in exactly one implementation
+        "ratingClass" => rating_class($row["personal"]["score"]),
+        "ratingScore" => $row["personal"]["score"] === null
+            ? "No data for your priorities"
+            : rating_score($row["personal"]["score"]),
+        "ratingLabel" => rating_class($row["personal"]["score"]) === ""
+            ? ""
+            : rating_label($row["personal"]["score"]),
+        "editorial"   => rating_score($row["rating"]),
+        "thin"        => !$row["personal"]["confident"],
     ];
 }
 
-render("category_form.php", ["title" => "Categories", "categories" => $categories]);
+render("category_form.php", [
+    "title" => "Categories",
+    "categories" => $categories,
+    "chosen" => has_chosen_priorities(),
+]);
