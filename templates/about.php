@@ -41,6 +41,66 @@
   above always matches what's on screen.
 </p>
 
+<h4 class="mt-4" id="how-scores-work">How scores work</h4>
+
+<?php $dims = score_dimensions(); ?>
+
+<p>
+  A brand's overall score is a weighted average of the dimensions we hold data
+  for. You set each weight from <?= (int) WEIGHT_MIN ?> to <?= (int) WEIGHT_MAX ?>
+  on the <a href="priorities.php">Priorities</a> page; if you haven't, every
+  dimension is weighted <?= (int) WEIGHT_DEFAULT ?>. Each score is multiplied by
+  its weight, the results are added up, and the total is divided by the sum of
+  the weights used. A dimension with no data is left out of both sums, never
+  counted as zero. A dimension weighted 0 is ignored. If the dimensions with
+  data make up less than <?= (int) round(COVERAGE_LOW * 100) ?>% of the weight
+  you asked for, the score is flagged as thin. Each brand page shows the
+  calculation.
+</p>
+
+<h5 class="mt-3"><?= e($dims["nutrition"]["label"]) ?></h5>
+<p class="mb-1">Open Food Facts Nutri-Score, mapped to a score:</p>
+<ul class="grade-map">
+  <?php foreach (off_grade_map() as $grade => $score): ?>
+    <li><?= e(strtoupper($grade)) ?> = <?= e(rating_score($score)) ?></li>
+  <?php endforeach ?>
+</ul>
+
+<h5><?= e($dims["environment"]["label"]) ?></h5>
+<p>
+  Open Food Facts Eco-Score (now called Green-Score), with the same mapping:
+  <?= e(implode(", ", array_map(function ($g, $s) { return strtoupper($g) . " = " . rating_score($s); },
+      array_keys(off_grade_map()), off_grade_map()))) ?>.
+</p>
+
+<h5><?= e($dims["welfare"]["label"]) ?></h5>
+<p class="mb-1">
+  Starts at 5 and adds credit for each recognised label on the product,
+  capped at 10. It never goes below 5, because a missing label is missing
+  evidence, not evidence of harm. A product with no recognised label is left
+  unassessed. Label credits:
+</p>
+<ul class="welfare-labels">
+  <?php foreach (off_welfare_labels() as $tag => $credit): ?>
+    <li><?= e(off_label_name($tag)) ?>: +<?= e(rtrim(rtrim(number_format($credit, 1), "0"), ".")) ?></li>
+  <?php endforeach ?>
+</ul>
+
+<h5><?= e($dims["editorial"]["label"]) ?> and <?= e($dims["ownership"]["label"]) ?></h5>
+<p>Entered by hand by us. These are not imported.</p>
+
+<h5>Brands with several products</h5>
+<p>
+  Each imported dimension is the mean across the brand's products, rounded to
+  one decimal place. It reflects the products Open Food Facts lists for the
+  brand, not necessarily the brand's whole range.
+</p>
+
+<p class="small text-muted">
+  Product data from Open Food Facts, available under the Open Database
+  Licence (ODbL).
+</p>
+
 <h4 class="mt-4">Where the information comes from</h4>
 
 <p>
