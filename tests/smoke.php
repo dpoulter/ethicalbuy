@@ -960,5 +960,38 @@ $_COOKIE[PRIORITIES_COOKIE] = "editorial=0&environment=0&nutrition=5&welfare=0&o
 unset($_COOKIE[PRIORITIES_COOKIE]);
 check("product: priorities apply (nutrition only)", strpos($html, 'score-calc-result">6/10<') !== false);
 
+section("brand page products (needs the dev database)");
+// 30 products: 28 with a nutrition grade, 2 without, so a nutrition-only
+// reader sees two unscored products, which must sort last
+$grades = ["a", "b", "c", "d", "e"];
+$bulk = [];
+for ($i = 1; $i <= 30; $i++) {
+    $bulk[] = $pp(sprintf("77%04d", $i), "Bulk Item " . $i, "Prodco", ["prodco"], $i > 28 ? null : $grades[$i % 5]);
+}
+$runP($prodBrandId, [["fn" => "products", "brand" => "Prodco", "mapped" => array_merge($feed, $bulk), "apply" => true, "complete" => true]]);
+$nutriOnly = [PRIORITIES_COOKIE => "editorial=0&environment=0&nutrition=5&welfare=0&ownership=0"];
+[$st, $html] = runPage("brand.php", ["brand" => "Prodco"], $nutriOnly);
+check("brand products: section shown", $st === 200 && strpos($html, '33 products listed by Open Food Facts') !== false);
+structureChecks("brand products", $html);
+$tbl = substr($html, strpos($html, 'brand-products'));
+check("brand products: 25 per page", substr_count(substr($tbl, 0, strpos($tbl, '</table>')), 'href="product.php?code=') === 25);
+check("brand products: best first", strpos($tbl, '10/10') < strpos($tbl, '8/10') && strpos($tbl, '8/10') < strpos($tbl, '6/10'));
+check("brand products: pager", strpos($html, 'Page 1 of 2') !== false && strpos($html, 'pp=2#products') !== false);
+[$st, $html2] = runPage("brand.php", ["brand" => "Prodco", "pp" => "2"], $nutriOnly);
+$tbl2 = substr($html2, strpos($html2, 'brand-products'));
+$tbl2 = substr($tbl2, 0, strpos($tbl2, '</table>'));
+check("brand products: page 2 has the rest", substr_count($tbl2, 'href="product.php?code=') === 8);
+check("brand products: unscored last", preg_match('~Bulk Item 29.*No data for your priorities.*Bulk Item 30.*No data for your priorities\s*</span>\s*</td>(?:(?!href="product).)*$~s', $tbl2) === 1
+    || (strrpos($tbl2, 'No data for your priorities') > strrpos($tbl2, '/10')));
+[$st, $html3] = runPage("brand.php", ["brand" => "Prodco", "pq" => "oat"], $nutriOnly);
+$tbl3 = substr($html3, strpos($html3, 'brand-products'));
+$tbl3 = substr($tbl3, 0, strpos($tbl3, '</table>'));
+check("brand products: name filter", substr_count($tbl3, 'href="product.php?code=') === 1 && strpos($tbl3, 'Oat Drink') !== false);
+[$st, $html4] = runPage("brand.php", ["brand" => "Prodco", "pq" => "zzz"]);
+check("brand products: filter with no match", strpos($html4, 'No products match &ldquo;zzz&rdquo;') !== false);
+$nutriMean = (float) query("SELECT score FROM brand_scores WHERE brand_id = ? AND dimension = 'nutrition'", $prodBrandId)[0]["score"];
+check("brand working read from products", preg_match('~derivation-products.*?href="product.php\?code=\d+">~s', $html) === 1
+    && preg_match('~derivation-sum">[^<]*\) / 31 = ' . preg_quote(number_format($nutriMean, 1)) . '~', $html) === 1);
+
 echo $fails === 0 ? "\nALL PASS\n" : "\n$fails FAILURE(S)\n";
 exit($fails === 0 ? 0 : 1);

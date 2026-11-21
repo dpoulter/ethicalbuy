@@ -25,6 +25,10 @@ if ($brand === null)
 
 $weights = current_weights();
 
+// products table: optional name filter and page number
+$product_filter = input_string($_GET, "pq");
+$product_page = (int) input_string($_GET, "pp", "1");
+
 // the reader's own rating, plus the per-dimension detail behind it
 $stored = get_brand_scores($brand["brand_id"]);
 $values = brand_score_values($brand, $stored);
@@ -35,6 +39,19 @@ if ($brand_products === false)
 {
     apologize("We could not load that brand's products just now. Please try again shortly.");
 }
+
+// each product scored like the brand: its own Open Food Facts dimensions
+// plus the brand's editorial view and ownership
+$listed = attach_product_personal_scores($brand_products, $values, $weights);
+if ($product_filter !== "")
+{
+    $needle = search_key($product_filter);
+    $listed = array_values(array_filter($listed, function ($p) use ($needle) {
+        return $needle === "" || strpos(search_key((string) $p["name"]), $needle) !== false;
+    }));
+}
+sort_by_personal_score($listed);
+[$product_rows, $product_page, $product_pages] = paginate($listed, $product_page);
 
 // other brands in the same category, scored the same way so the comparison
 // is like for like
@@ -63,4 +80,10 @@ render("brand.php", [
     "scores" => $stored,
     "derivations" => brand_derivations($stored, $brand_products, get_brand_score_inputs($brand["brand_id"])),
     "chosen" => has_chosen_priorities(),
+    "product_total" => count($brand_products),
+    "product_matches" => count($listed),
+    "product_rows" => $product_rows,
+    "product_page" => $product_page,
+    "product_pages" => $product_pages,
+    "product_filter" => $product_filter,
 ]);

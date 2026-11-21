@@ -96,6 +96,81 @@
 
 <?php require(TEMPLATE_DIR . "/partials/score_card.php"); ?>
 
+<?php if (!empty($product_total)): ?>
+  <div class="card mb-4" id="products">
+    <div class="card-body">
+      <h5 class="card-title">Products</h5>
+      <p class="text-muted small">
+        <?= (int) $product_total ?> product<?= $product_total === 1 ? "" : "s" ?> listed by Open Food Facts.
+        Each is scored on its own nutrition, environment and welfare, plus the
+        brand's overall view and ownership. Best for your priorities first.
+      </p>
+
+      <form class="row g-2 mb-3" method="get" action="brand.php#products">
+        <input type="hidden" name="brand" value="<?= e($brand["brand"]) ?>">
+        <div class="col-sm-6">
+          <label class="visually-hidden" for="pq">Filter products by name</label>
+          <input class="form-control form-control-sm" id="pq" name="pq" type="text"
+                 placeholder="Filter by name" value="<?= e($product_filter) ?>">
+        </div>
+        <div class="col-auto">
+          <button class="btn btn-sm btn-outline-primary" type="submit">Filter</button>
+          <?php if ($product_filter !== ""): ?>
+            <a class="btn btn-sm btn-outline-secondary" href="brand.php?brand=<?= urlencode($brand["brand"]) ?>#products">Clear</a>
+          <?php endif ?>
+        </div>
+      </form>
+
+      <?php if (!$product_rows): ?>
+        <p class="mb-0">No products match &ldquo;<?= e($product_filter) ?>&rdquo;.</p>
+      <?php else: ?>
+        <div class="table-responsive">
+          <table class="table table-sm align-middle brand-products">
+            <thead>
+              <tr>
+                <th>Product</th>
+                <th><?= $chosen ? "Your rating" : "Balanced" ?></th>
+                <th>Nutrition</th>
+                <th>Environment</th>
+                <th>Welfare</th>
+              </tr>
+            </thead>
+            <tbody>
+              <?php foreach ($product_rows as $prod): ?>
+                <tr>
+                  <td>
+                    <a href="product.php?code=<?= urlencode($prod["code"]) ?>">
+                      <?= e($prod["name"] !== null && $prod["name"] !== "" ? $prod["name"] : "Product " . $prod["code"]) ?>
+                    </a>
+                  </td>
+                  <td>
+                    <?php $personal_saved = $personal; $personal = $prod["personal"]; $personal_compact = true;
+                          require(TEMPLATE_DIR . "/partials/personal_score.php"); $personal = $personal_saved; ?>
+                  </td>
+                  <?php foreach (["nutrition", "environment", "welfare"] as $dim): ?>
+                    <td><?php $dim_score = $prod["scores"][$dim] ?? null; require(TEMPLATE_DIR . "/partials/dimension_badge.php"); ?></td>
+                  <?php endforeach ?>
+                </tr>
+              <?php endforeach ?>
+            </tbody>
+          </table>
+        </div>
+        <?php
+          $pager_page = $product_page;
+          $pager_pages = $product_pages;
+          $pager_url = function ($n) use ($brand, $product_filter) {
+              return "brand.php?" . http_build_query(array_filter([
+                  "brand" => $brand["brand"], "pq" => $product_filter, "pp" => $n,
+              ], function ($v) { return $v !== ""; })) . "#products";
+          };
+          require(TEMPLATE_DIR . "/partials/pager.php");
+        ?>
+        <p class="small text-muted mb-0">Product data from Open Food Facts (ODbL).</p>
+      <?php endif ?>
+    </div>
+  </div>
+<?php endif ?>
+
 <?php require(TEMPLATE_DIR . "/partials/rating_legend.php"); ?>
 
 <?php if (!empty($alternatives)): ?>
