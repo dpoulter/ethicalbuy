@@ -29,6 +29,13 @@ $weights = current_weights();
 $stored = get_brand_scores($brand["brand_id"]);
 $values = brand_score_values($brand, $stored);
 
+// the brand's products, scored the same way as the brand
+$brand_products = get_brand_products($brand["brand_id"]);
+if ($brand_products === false)
+{
+    apologize("We could not load that brand's products just now. Please try again shortly.");
+}
+
 // other brands in the same category, scored the same way so the comparison
 // is like for like
 $alternatives = get_brands_in_category($brand["category"], $brand["brand"]);
@@ -54,6 +61,6 @@ render("brand.php", [
     "personal" => personal_score($values, $weights),
     "breakdown" => score_breakdown($values, $weights),
     "scores" => $stored,
-    "inputs" => get_brand_score_inputs($brand["brand_id"]),
+    "derivations" => brand_derivations($stored, $brand_products, get_brand_score_inputs($brand["brand_id"])),
     "chosen" => has_chosen_priorities(),
 ]);

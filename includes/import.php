@@ -223,7 +223,7 @@ function off_mean_points($contributions)
  * One line describing how a dimension score is derived, built from the same
  * tables the maths uses. Null for dimensions the importer does not derive.
  */
-function off_dimension_method($dimension)
+function off_dimension_method($dimension, $per_product = false)
 {
     $grades = implode(", ", array_map(function ($g, $s) {
         return strtoupper($g) . " " . rating_score($s);
@@ -233,15 +233,21 @@ function off_dimension_method($dimension)
     switch ($dimension)
     {
         case "nutrition":
-            return "Nutri-Score letter per product: $grades. Brand score is the average.";
+            return $per_product
+                ? "Nutri-Score letter: $grades."
+                : "Nutri-Score letter per product: $grades. Brand score is the average.";
         case "environment":
-            return "Eco-Score (Green-Score) letter per product: $grades. Brand score is the average.";
+            return $per_product
+                ? "Eco-Score (Green-Score) letter: $grades."
+                : "Eco-Score (Green-Score) letter per product: $grades. Brand score is the average.";
         case "welfare":
             $credits = implode(", ", array_map(function ($tag, $c) {
                 return off_label_name($tag) . " +" . rtrim(rtrim(number_format($c, 1), "0"), ".");
             }, array_keys(off_welfare_labels()), off_welfare_labels()));
-            return "Each product starts at 5 and gains credit per recognised label ($credits), "
-                 . "capped at 10. Brand score is the average.";
+            return $per_product
+                ? "Starts at 5 and gains credit per recognised label ($credits), capped at 10."
+                : "Each product starts at 5 and gains credit per recognised label ($credits), "
+                  . "capped at 10. Brand score is the average.";
     }
 
     return null;
@@ -664,6 +670,14 @@ function off_products_for_brand($brand_name, $mapped_products)
     }
 
     return array_values($out);
+}
+
+/**
+ * Method line for a single product's score on a dimension.
+ */
+function off_product_method($dimension)
+{
+    return off_dimension_method($dimension, true);
 }
 
 /**

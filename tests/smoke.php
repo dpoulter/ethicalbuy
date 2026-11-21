@@ -201,7 +201,9 @@ $evOut = renderTo("brand.php", [
     "personal" => personal_score($evValues, default_weights()),
     "breakdown" => score_breakdown($evValues, default_weights()),
     "scores" => ["environment" => $offScore(8), "nutrition" => $offScore(7.5)],
-    "inputs" => ["nutrition" => $nutriInputs],
+    // no products yet, so the working falls back to the 005 evidence rows
+    "derivations" => brand_derivations(["environment" => $offScore(8), "nutrition" => $offScore(7.5)],
+        [], ["nutrition" => $nutriInputs]),
     "chosen" => true,
 ]);
 structureChecks("brand derivation", $evOut);
@@ -228,7 +230,8 @@ $curOut = renderTo("brand.php", [
     "personal" => personal_score(["nutrition" => 4], default_weights()),
     "breakdown" => score_breakdown(["nutrition" => 4], default_weights()),
     "scores" => ["nutrition" => ["score" => 4, "note" => "x", "source" => "curated", "source_url" => null, "retrieved_at" => null]],
-    "inputs" => ["nutrition" => $nutriInputs], "chosen" => true,
+    "derivations" => brand_derivations(["nutrition" => ["score" => 4, "source" => "curated"]], [], ["nutrition" => $nutriInputs]),
+    "chosen" => true,
 ]);
 check("derivation: curated score ignores leftover inputs",
     strpos($curOut, 'derivation-products') === false && strpos($curOut, 'Entered by hand.') !== false);
@@ -243,7 +246,8 @@ $manyOut = renderTo("brand.php", [
     "weights" => default_weights(),
     "personal" => personal_score(["nutrition" => 10], default_weights()),
     "breakdown" => score_breakdown(["nutrition" => 10], default_weights()),
-    "scores" => ["nutrition" => $offScore(10)], "inputs" => ["nutrition" => $many],
+    "scores" => ["nutrition" => $offScore(10)],
+    "derivations" => brand_derivations(["nutrition" => $offScore(10)], [], ["nutrition" => $many]),
     "chosen" => true,
 ]);
 check("derivation: first 15 listed", strpos($manyOut, 'Item 14') !== false && strpos($manyOut, 'Item 15<') === false);
@@ -911,6 +915,50 @@ $runP($pid, [["fn" => "products", "brand" => "Prodco", "mapped" => $feed, "apply
 check("dry run writes nothing", (int) query("SELECT COUNT(*) n FROM products WHERE brand_id = ?", $pid)[0]["n"] === 2);
 $runP($pid, [$call]);  // leave three products for the page tests below
 $prodBrandId = $pid;
+
+section("product page (needs the dev database)");
+// runs a public page in a child PHP process, so apologize()'s exit and the
+// HTTP status are exercised as on the site. Returns [status, html].
+function runPage($script, $get, $cookie = []) {
+    $code = '$_GET = json_decode(getenv("T_GET"), true); $_COOKIE = json_decode(getenv("T_COOKIE"), true);'
+          . '$_SERVER["REQUEST_METHOD"] = "GET";'
+          . 'register_shutdown_function(function () { file_put_contents("php://stderr", "STATUS:" . (http_response_code() ?: 200)); });'
+          . 'require ' . var_export(__DIR__ . "/../public/" . $script, true) . ';';
+    $env = array_merge(getenv(), ["T_GET" => json_encode($get), "T_COOKIE" => json_encode($cookie ?: new stdClass())]);
+    $proc = proc_open([PHP_BINARY, "-r", $code], [1 => ["pipe", "w"], 2 => ["pipe", "w"]], $pipes, null, $env);
+    $html = stream_get_contents($pipes[1]);
+    $err = stream_get_contents($pipes[2]);
+    proc_close($proc);
+    $status = preg_match('/STATUS:(\d+)/', $err, $m) ? (int) $m[1] : 0;
+    return [$status, $html];
+}
+[$st, $html] = runPage("product.php", ["code" => "9001"]);
+check("product: renders", $st === 200 && strpos($html, '<h3 class="card-title mb-0">Oat Drink</h3>') !== false);
+structureChecks("product page", $html);
+check("product: links up to brand", strpos($html, 'href="brand.php?brand=Prodco"') !== false);
+check("product: own dimensions have single working", substr_count($html, 'derivation-single') === 3);
+check("product: nutrition grade and points", preg_match('~Grade: B\s*= 8 points~', $html) === 1);
+check("product: welfare labels shown", preg_match('~Labels: Vegan\s*= 7 points~', $html) === 1);
+check("product: method line per product", strpos($html, 'Nutri-Score letter: A 10, B 8, C 6, D 4, E 2.') !== false);
+check("product: editorial inherited and labelled", strpos($html, "The brand&#039;s, not this product&#039;s") !== false
+    && strpos($html, 'Taken from the brand') !== false);
+check("product: ODbL attribution and OFF link", strpos($html, 'Open Database Licence (ODbL)') !== false
+    && strpos($html, 'href="https://world.openfoodfacts.org/product/9001" target="_blank" rel="noopener noreferrer"') !== false);
+check("product: overall working collapsed", strpos($html, '<details class="mt-4 score-working">') !== false);
+$pv = product_score_values(get_scores_for_products([query("SELECT id FROM products WHERE code='9001'")[0]["id"]])[(int) query("SELECT id FROM products WHERE code='9001'")[0]["id"]],
+    brand_score_values(["rating" => 6], get_brand_scores($prodBrandId)));
+check("product: headline uses the shared scoring", preg_match('~score-calc-result">' . preg_quote(rating_score(personal_score($pv, default_weights())["score"]), "~") . '<~', $html) === 1);
+[$st, $html] = runPage("product.php", ["code" => "9003"]);
+check("product: partly scored renders", $st === 200 && substr_count($html, 'Not assessed') === 3);  // environment, welfare, ownership
+check("product: missing dimension excluded", strpos($html, 'no data (excluded from the average') !== false);
+[$st, $html] = runPage("product.php", ["code" => "0000000"]);
+check("product: unknown code is 404 with apology", $st === 404 && strpos($html, "We don&#039;t have that product.") !== false);
+[$st, $html] = runPage("product.php", []);
+check("product: no code apologises", strpos($html, 'No product was specified.') !== false);
+$_COOKIE[PRIORITIES_COOKIE] = "editorial=0&environment=0&nutrition=5&welfare=0&ownership=0";
+[$st, $html] = runPage("product.php", ["code" => "9002"], [PRIORITIES_COOKIE => $_COOKIE[PRIORITIES_COOKIE]]);
+unset($_COOKIE[PRIORITIES_COOKIE]);
+check("product: priorities apply (nutrition only)", strpos($html, 'score-calc-result">6/10<') !== false);
 
 echo $fails === 0 ? "\nALL PASS\n" : "\n$fails FAILURE(S)\n";
 exit($fails === 0 ? 0 : 1);
