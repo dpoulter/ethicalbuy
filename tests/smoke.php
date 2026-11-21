@@ -1029,6 +1029,9 @@ check("search: empty query lists brands, asks for a product name", $st === 200
 check("search: stopword query does not error", $st === 200);
 [$st, $html] = runPage("search.php", ["search_string" => "Prodco"]);
 check("search: old parameter still works", strpos($html, 'href="brand.php?brand=Prodco"') !== false);
+// InnoDB's full-text index can trail a commit from another connection by a
+// moment; wait for it rather than fail on timing
+for ($wait = 0; $wait < 20 && search_products("bulk")[1] < 30; $wait++) { usleep(100000); }
 [$st, $html] = runPage("search.php", ["q" => "bulk"]);
 check("search: products paginated", strpos($html, '30 products matched') !== false && strpos($html, 'Page 1 of 2') !== false
     && substr_count($html, 'href="product.php?code=') === 25);
@@ -1039,6 +1042,148 @@ check("search: exact name first", preg_match('~search-products.*?href="product.p
 [$st, $html] = runPage("index.php", []);
 check("nav: menu says Search", strpos($html, '>Search</a>') !== false && strpos($html, 'Product Search') === false);
 query("DELETE FROM brands WHERE name IN ('Bén & Jerry''s Test', 'Oatsome Test', 'Prodco', 'Prodc')");
+
+section("ownership: type mapping");
+$expected = [
+    "Multinational Corporation" => "multinational", "UK Public Company" => "listed",
+    "Independent UK Company" => "independent", "Private Equity" => "private_equity",
+    "Family-Owned UK Company" => "family", "Family-Owned" => "family", "Private UK Company" => "private",
+    "Private Company" => "private", "Swiss Corporation" => "multinational", "Co-operative" => "cooperative",
+    "Public Company" => "listed", "German Family-Owned" => "family", "Supermarket Own Brand" => "own_brand",
+    "Subsidiary (US Corporation)" => "subsidiary", "Publicly Traded UK Company" => "listed",
+    "Irish Co-operative" => "cooperative", "Retail Own Brand" => "own_brand",
+    "Subsidiary of German Pharma Company" => "subsidiary", "Independent US Company" => "independent",
+    "Independent (Social Enterprise)" => "social_enterprise", "Private Austrian Company" => "private",
+    "Subsidiary (US Corp)" => "subsidiary", "Private Irish Company" => "private",
+];
+$points = ["social_enterprise" => 10, "cooperative" => 9, "independent" => 8, "family" => 8, "private" => 6,
+           "listed" => 4, "own_brand" => 3, "private_equity" => 3, "subsidiary" => 3, "multinational" => 2];
+foreach ($expected as $type => $key) {
+    $c = ownership_category_for_type($type);
+    check("type \"$type\" -> $key", $c !== null && $c["key"] === $key && $c["points"] === $points[$key]);
+}
+check("every category has the agreed points", array_column(ownership_categories(), "points", "key") == $points);
+check("case, accents and punctuation ignored", ownership_category_for_type("  family owned uk  COMPANY ")["key"] === "family"
+    && ownership_category_for_type("Co operative")["key"] === "cooperative");
+check("unseen type -> null", ownership_category_for_type("Mutual society") === null);
+check("no substring match: Independent", ownership_category_for_type("Independent") === null);
+check("no substring match: Private", ownership_category_for_type("Private") === null);
+check("no substring match: longer private type", ownership_category_for_type("Private Equity Backed Co-operative") === null);
+check("empty and null types -> null", ownership_category_for_type("") === null && ownership_category_for_type(null) === null);
+check("note format", ownership_note("Family-Owned UK Company", ownership_category_for_type("Family-Owned UK Company"))
+    === 'Recorded as "Family-Owned UK Company"; counted as Family-owned: 8');
+check("dimension renamed", score_dimensions()["ownership"]["label"] === "Ownership");
+
+section("ownership: script and pages (needs the dev database)");
+// runs bin/score-ownership.php as the importer's database user
+function runOwnershipScript($apply) {
+    $env = array_merge(getenv(), ["DB_USER" => getenv("IMPORT_DB_USER") ?: "ethicalbuy_import",
+                                  "DB_PASSWORD" => getenv("IMPORT_DB_PASSWORD") ?: "ethicalbuy_import_dev"]);
+    $cmd = [PHP_BINARY, __DIR__ . "/../bin/score-ownership.php"];
+    if ($apply) { $cmd[] = "--apply"; }
+    $proc = proc_open($cmd, [1 => ["pipe", "w"], 2 => ["pipe", "w"]], $pipes, null, $env);
+    $out = stream_get_contents($pipes[1]) . stream_get_contents($pipes[2]);
+    return [proc_close($proc), $out];
+}
+$ownRows = function ($name) {
+    return query("SELECT s.score, s.note, s.source FROM brand_scores s JOIN brands b ON b.id = s.brand_id
+                   WHERE b.name = ? AND s.dimension = 'ownership'", $name);
+};
+query("DELETE FROM brands WHERE name LIKE 'Own Test %'");
+query("INSERT INTO brands (name, type, rating) VALUES
+       ('Own Test Family', 'Family-Owned UK Company', 7),
+       ('Own Test Mutual', 'Mutual society', 7),
+       ('Own Test Curated', 'Multinational Corporation', 7),
+       ('Own Test Multi', 'Multinational Corporation', 6)");
+$curId = (int) query("SELECT id FROM brands WHERE name = 'Own Test Curated'")[0]["id"];
+admin_save_brand_score($curId, "ownership", 7.0, "Checked by hand");
+
+[$rc, $out] = runOwnershipScript(false);
+check("script: dry run exits 0", $rc === 0 && strpos($out, "DRY RUN") !== false);
+check("script: dry run writes nothing", $ownRows("Own Test Family") === []);
+check("script: dry run counts per category", preg_match('/Family-owned\s+8 pts\s+[1-9]/', $out) === 1);
+check("script: reports unmapped name and type", strpos($out, 'Own Test Mutual: "Mutual society"') !== false);
+check("script: reports curated skip", strpos($out, "Own Test Curated (source: curated)") !== false);
+
+[$rc, $out] = runOwnershipScript(true);
+$fam = $ownRows("Own Test Family");
+check("script: writes the expected row", $rc === 0 && count($fam) === 1 && (float) $fam[0]["score"] === 8.0
+    && $fam[0]["source"] === "type-mapping"
+    && $fam[0]["note"] === 'Recorded as "Family-Owned UK Company"; counted as Family-owned: 8');
+check("script: unmapped stays unscored", $ownRows("Own Test Mutual") === []);
+check("script: curated row untouched", (float) $ownRows("Own Test Curated")[0]["score"] === 7.0
+    && $ownRows("Own Test Curated")[0]["source"] === "curated");
+[$rc, $out] = runOwnershipScript(true);
+check("script: idempotent", count($ownRows("Own Test Family")) === 1 && preg_match('/would write|written\s+0/', $out) === 1
+    && preg_match('/unchanged\s+[1-9]/', $out) === 1);
+query("UPDATE brands SET type = 'Co-operative' WHERE name = 'Own Test Family'");
+runOwnershipScript(true);
+check("script: re-run follows a changed type", (float) $ownRows("Own Test Family")[0]["score"] === 9.0);
+query("UPDATE brands SET type = 'Family-Owned UK Company' WHERE name = 'Own Test Family'");
+runOwnershipScript(true);
+
+[$st, $html] = runPage("brand.php", ["brand" => "Own Test Family"]);
+structureChecks("ownership brand", $html);
+check("brand: ownership row expands", preg_match('~<details class="dimension-derivation">\s*<summary>Ownership</summary>~', $html) === 1);
+check("brand: recorded type, category and points", strpos($html,
+    'Recorded as &ldquo;Family-Owned UK Company&rdquo;, counted as Family-owned: 8') !== false);
+check("brand: method line", strpos($html, "Scored from the brand's recorded ownership type.") !== false);
+check("brand: full category table, this brand marked",
+    substr_count($html, '<td>Multinational group</td>') === 1 && strpos($html, 'Family-owned (this brand)') !== false);
+check("brand: arithmetic includes ownership", strpos($html, 'Ownership 8.0 &times; 3 = 24.0') !== false);
+$famValues = brand_score_values(["rating" => 7], get_brand_scores((int) query("SELECT id FROM brands WHERE name = 'Own Test Family'")[0]["id"]));
+check("brand: headline equals the working (default weights)",
+    preg_match('~score-calc-result">' . preg_quote(rating_score(personal_score($famValues, default_weights())["score"]), "~") . '<~', $html) === 1);
+$ownCookie = "editorial=1&environment=0&nutrition=0&welfare=0&ownership=5";
+[$st, $html] = runPage("brand.php", ["brand" => "Own Test Family"], [PRIORITIES_COOKIE => $ownCookie]);
+check("brand: headline equals the working (custom weights)",
+    strpos($html, '(7.0 + 40.0) / (1 + 5) = 47.0 / 6 = <strong class="score-calc-result">7.8/10</strong>') !== false
+    && round((7 * 1 + 8 * 5) / 6, 1) === personal_score($famValues, parse_weights($ownCookie))["score"]);
+[$st, $html] = runPage("brand.php", ["brand" => "Own Test Mutual"]);
+check("brand: unmapped type is Not assessed", preg_match('~<td>\s*Ownership\s*</td>.*?Not assessed~s', $html) === 1);
+[$st, $html] = runPage("brand.php", ["brand" => "Own Test Curated"]);
+check("brand: hand entry says so with its note", strpos($html, 'Entered by hand.') !== false
+    && strpos($html, 'Checked by hand') !== false && strpos($html, 'counted as Multinational') === false);
+
+// a product inherits the brand's working
+$famId = (int) query("SELECT id FROM brands WHERE name = 'Own Test Family'")[0]["id"];
+$child([["fn" => "products", "brand" => "Own Test Family", "apply" => true, "complete" => true,
+         "mapped" => [$pp("660001", "Family Jam", "Own Test Family", ["own-test-family"], "c")]]], $famId);
+[$st, $html] = runPage("product.php", ["code" => "660001"]);
+check("product: ownership inherited and labelled", strpos($html, 'Taken from the brand') !== false
+    && strpos($html, "The brand&#039;s, not this product&#039;s") !== false);
+check("product: same ownership working as the brand", strpos($html,
+    'Recorded as &ldquo;Family-Owned UK Company&rdquo;, counted as Family-owned: 8') !== false
+    && strpos($html, 'Family-owned (this brand)') !== false);
+check("product: arithmetic includes ownership", strpos($html, 'Ownership 8.0 &times; 3 = 24.0') !== false);
+$pScores = get_scores_for_products([(int) query("SELECT id FROM products WHERE code = '660001'")[0]["id"]]);
+$pValues = product_score_values(reset($pScores), $famValues);
+check("product: headline equals the working",
+    preg_match('~score-calc-result">' . preg_quote(rating_score(personal_score($pValues, default_weights())["score"]), "~") . '<~', $html) === 1);
+
+// /admin: an unchanged form keeps the type-mapped source; a real edit makes it curated
+$multiId = (int) query("SELECT id FROM brands WHERE name = 'Own Test Multi'")[0]["id"];
+$form = [];
+foreach (get_brand_scores($multiId) as $dim => $row) {
+    $form["score_$dim"] = rtrim(rtrim((string) $row["score"], "0"), ".");
+    $form["note_$dim"] = (string) ($row["note"] ?? "");
+}
+check("admin: unchanged save ok", admin_save_brand_scores($multiId, $form) === []);
+check("admin: unchanged ownership keeps its source", $ownRows("Own Test Multi")[0]["source"] === "type-mapping");
+$form["score_ownership"] = "5";
+$form["note_ownership"] = "Now employee-owned";
+admin_save_brand_scores($multiId, $form);
+check("admin: hand edit is not type-mapping", $ownRows("Own Test Multi")[0]["source"] === "curated"
+    && (float) $ownRows("Own Test Multi")[0]["score"] === 5.0);
+runOwnershipScript(true);
+check("script: never overwrites the hand edit", (float) $ownRows("Own Test Multi")[0]["score"] === 5.0);
+
+$o = renderTo("about.php", ["title" => "About"]);
+check("about: ownership table generated", substr_count($o, '<td>Multinational group</td>') === 1
+    && strpos($o, 'Business size is not scored yet.') !== false);
+check("about: no longer says ownership is hand entered", strpos($o, 'Ownership</h5>') !== false
+    && strpos($o, '>Our overall view</h5>') !== false);
+query("DELETE FROM brands WHERE name LIKE 'Own Test %'");
 
 echo $fails === 0 ? "\nALL PASS\n" : "\n$fails FAILURE(S)\n";
 exit($fails === 0 ? 0 : 1);

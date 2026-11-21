@@ -1,5 +1,7 @@
 <?php
 
+require_once(__DIR__ . "/ownership.php");
+
 /**
  * scoring.php
  *
@@ -75,9 +77,9 @@ function score_dimensions()
             "sourced" => "Derived from Open Food Facts labels",
         ],
         "ownership" => [
-            "label" => "Ownership & business size",
-            "blurb" => "Independent, employee, women-led or minority-led ownership.",
-            "sourced" => "Curated by us",
+            "label" => "Ownership",
+            "blurb" => "The type of owner, from independent and co-operative to multinational group.",
+            "sourced" => "From the brand's recorded ownership type",
         ],
     ];
 }

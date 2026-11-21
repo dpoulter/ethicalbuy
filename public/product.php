@@ -36,6 +36,7 @@ render("product.php", [
     "product" => $product,
     "personal" => personal_score($values, $weights),
     "breakdown" => score_breakdown($values, $weights),
-    "derivations" => product_derivations($product_scores, $product["brand"]),
+    "derivations" => product_derivations($product_scores, $product["brand"],
+        brand_derivations($brand_stored, [], [])),
     "chosen" => has_chosen_priorities(),
 ]);

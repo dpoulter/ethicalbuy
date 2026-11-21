@@ -5,8 +5,9 @@
  *   list          brand score from several products: method, rows, points, score
  *   single        product score from one grade or set of labels: method, input, points
  *   not_recorded  derived score with no product detail stored yet: source_url
- *   inherited     taken from the brand: brand
- *   hand          entered by hand
+ *   inherited     taken from the brand: brand, from (the brand's own derivation)
+ *   ownership     from the recorded ownership type: type, category, note, points
+ *   hand          entered by hand: note (optional)
  *
  * and $row (the score_breakdown() row).
  */
@@ -68,12 +69,45 @@ $is_link = function ($url) { return preg_match('~^https?://~i', (string) $url) =
   <?php endif ?>
 
 <?php elseif ($d["kind"] === "inherited"): ?>
-  <p class="text-muted mb-0">
+  <p class="text-muted mb-2">
     Taken from the brand,
     <a href="brand.php?brand=<?= urlencode($d["brand"]) ?>"><?= e($d["brand"]) ?></a>.
-    Entered by hand.
   </p>
+  <?php
+    // the brand's own working, rendered with this same partial
+    $d_saved = $d;
+    $d = $d["from"] ?? ["kind" => "hand"];
+    require(__FILE__);
+    $d = $d_saved;
+  ?>
+
+<?php elseif ($d["kind"] === "ownership"): ?>
+  <p class="text-muted mb-2 derivation-method">Scored from the brand's recorded ownership type.</p>
+  <?php if ($d["category"] !== null && (float) $d["category"]["points"] === (float) $d["points"]): ?>
+    <div class="font-monospace derivation-ownership mb-2">
+      Recorded as &ldquo;<?= e($d["type"]) ?>&rdquo;, counted as <?= e($d["category"]["label"]) ?>: <?= e($fmt($d["points"])) ?>
+    </div>
+  <?php else: ?>
+    <?php // the table has changed since this score was written: show what was stored ?>
+    <p class="mb-2"><?= e($d["note"] ?? "") ?></p>
+  <?php endif ?>
+  <table class="table table-sm mb-0 ownership-table">
+    <thead><tr><th>Category</th><th>Points</th><th>Meaning</th></tr></thead>
+    <tbody>
+      <?php foreach (ownership_categories() as $c): ?>
+        <?php $here = $d["category"] !== null && $c["key"] === $d["category"]["key"]; ?>
+        <tr<?= $here ? ' class="table-active fw-semibold"' : "" ?>>
+          <td><?= e($c["label"]) ?><?= $here ? " (this brand)" : "" ?></td>
+          <td><?= (int) $c["points"] ?></td>
+          <td><?= e($c["meaning"]) ?></td>
+        </tr>
+      <?php endforeach ?>
+    </tbody>
+  </table>
 
 <?php else: ?>
   <p class="text-muted mb-0">Entered by hand.</p>
+  <?php if (!empty($d["note"])): ?>
+    <p class="mb-0 derivation-note"><?= e($d["note"]) ?></p>
+  <?php endif ?>
 <?php endif ?>
