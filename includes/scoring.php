@@ -207,6 +207,8 @@ function clear_weights()
  *   weight_asked   int         weight the reader requested
  *   coverage       float       weight_used / weight_asked, 0..1
  *   confident      bool        whether coverage clears COVERAGE_LOW
+ *   terms          array       counted dimensions: key, label, score, weight, product
+ *   numerator      float       sum of score x weight over the counted dimensions
  *
  * A dimension weighted 0 is ignored entirely: the reader said it does not
  * matter, so its absence is not a gap.
@@ -218,8 +220,9 @@ function personal_score($scores, $weights)
     $weight_asked = 0;
     $covered = [];
     $missing = [];
+    $terms = [];
 
-    foreach (score_dimensions() as $key => $_)
+    foreach (score_dimensions() as $key => $meta)
     {
         $weight = (int) ($weights[$key] ?? 0);
 
@@ -241,6 +244,13 @@ function personal_score($scores, $weights)
         $numerator += $weight * (float) $value;
         $weight_used += $weight;
         $covered[] = $key;
+        $terms[] = [
+            "key"     => $key,
+            "label"   => $meta["label"],
+            "score"   => (float) $value,
+            "weight"  => $weight,
+            "product" => $weight * (float) $value,
+        ];
     }
 
     $coverage = $weight_asked > 0 ? $weight_used / $weight_asked : 0.0;
@@ -253,6 +263,8 @@ function personal_score($scores, $weights)
         "weight_asked" => $weight_asked,
         "coverage"     => round($coverage, 3),
         "confident"    => $coverage >= COVERAGE_LOW,
+        "terms"        => $terms,
+        "numerator"    => $numerator,
     ];
 }
 

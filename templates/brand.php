@@ -126,35 +126,19 @@
                 $evNote = trim((string) ($ev["note"] ?? ""));
                 $evSource = trim((string) ($ev["source"] ?? ""));
                 $evUrl = trim((string) ($ev["source_url"] ?? ""));
-                $evUrlOk = preg_match('~^https?://~i', $evUrl) === 1;
-                $evDate = trim((string) ($ev["retrieved_at"] ?? ""));
-                $evTime = $evDate !== "" ? strtotime($evDate) : false;
-                $hasEvidence = $evNote !== "" || $evSource !== "";
               ?>
               <td>
-                <?php if ($hasEvidence): ?>
-                  <details class="score-evidence">
-                    <summary><?= e($row["label"]) ?></summary>
-                    <div class="small text-muted mt-1">
-                      <?php if ($evNote !== ""): ?>
-                        <div><?= e($evNote) ?></div>
-                      <?php endif ?>
-                      <?php if ($evSource !== ""): ?>
-                        <div>Source:
-                          <?php if ($evUrlOk): ?>
-                            <a href="<?= e($evUrl) ?>" target="_blank" rel="noopener noreferrer"><?= e($evSource) ?></a>
-                          <?php else: ?>
-                            <?= e($evSource) ?>
-                          <?php endif ?>
-                        </div>
-                      <?php endif ?>
-                      <?php if ($evTime): ?>
-                        <div>Retrieved <?= e(date("j M Y", $evTime)) ?></div>
-                      <?php endif ?>
-                    </div>
-                  </details>
-                <?php else: ?>
-                  <?= e($row["label"]) ?>
+                <?= e($row["label"]) ?>
+                <?php if ($evNote !== "" || $evSource !== ""): ?>
+                  <div class="small text-muted score-evidence">
+                    <?= e($evNote) ?>
+                    <?php if ($evNote !== "" && $evSource !== ""): ?>&middot;<?php endif ?>
+                    <?php if ($evSource !== "" && preg_match('~^https?://~i', $evUrl)): ?>
+                      <a href="<?= e($evUrl) ?>" target="_blank" rel="noopener noreferrer"><?= e($evSource) ?></a>
+                    <?php elseif ($evSource !== ""): ?>
+                      <?= e($evSource) ?>
+                    <?php endif ?>
+                  </div>
                 <?php endif ?>
               </td>
               <td>
@@ -176,6 +160,52 @@
         </tbody>
       </table>
     </div>
+
+    <h6 class="mt-4">How this number is worked out</h6>
+    <?php if ($personal["score"] === null): ?>
+      <p class="small text-muted mb-0">
+        None of the dimensions you weighted has data for this brand, so there
+        is no score to calculate.
+      </p>
+    <?php else: ?>
+      <?php if (!$chosen): ?>
+        <p class="small text-muted mb-2">
+          You haven't set priorities, so every dimension is weighted
+          <?= (int) WEIGHT_DEFAULT ?> and this is a plain average.
+        </p>
+      <?php endif ?>
+      <div class="small font-monospace score-calc">
+        <?php foreach ($personal["terms"] as $t): ?>
+          <div><?= e($t["label"]) ?> <?= e(number_format($t["score"], 1)) ?> &times; <?= (int) $t["weight"] ?> = <?= e(number_format($t["product"], 1)) ?></div>
+        <?php endforeach ?>
+        <div class="mt-1 score-calc-total">
+          <?php
+            $sumTerms = implode(" + ", array_map(function ($t) { return number_format($t["product"], 1); }, $personal["terms"]));
+            $sumWeights = implode(" + ", array_map(function ($t) { return (string) $t["weight"]; }, $personal["terms"]));
+          ?>
+          (<?= e($sumTerms) ?>) / (<?= e($sumWeights) ?>) = <?= e(number_format($personal["numerator"], 1)) ?> / <?= (int) $personal["weight_used"] ?> = <strong class="score-calc-result"><?= e(rating_score($personal["score"])) ?></strong>
+        </div>
+      </div>
+    <?php endif ?>
+
+    <?php
+      $excluded = array_values(array_filter($breakdown, function ($r) { return !$r["counted"]; }));
+    ?>
+    <?php if ($excluded): ?>
+      <p class="small text-muted mt-2 mb-1">Not counted:</p>
+      <ul class="small text-muted mb-0 score-excluded">
+        <?php foreach ($excluded as $r): ?>
+          <li>
+            <?= e($r["label"]) ?>:
+            <?php if ($r["weight"] === 0): ?>
+              weighted 0 (ignored)
+            <?php else: ?>
+              no data (excluded from the average, not counted as zero)
+            <?php endif ?>
+          </li>
+        <?php endforeach ?>
+      </ul>
+    <?php endif ?>
 
     <?php if ($personal["missing"]): ?>
       <p class="small <?= $personal["confident"] ? "text-muted" : "text-danger" ?> mt-3 mb-0">

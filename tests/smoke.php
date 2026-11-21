@@ -20,6 +20,7 @@ putenv("DB_PASSWORD=" . (getenv("DB_PASSWORD") ?: "ethicalbuy_dev"));
 putenv("APP_DEBUG=0");
 
 require_once(__DIR__ . "/../includes/config.php");
+require_once(__DIR__ . "/../includes/import.php");
 
 $fails = 0;
 function check($label, $cond) {
@@ -201,8 +202,8 @@ $evOut = renderTo("brand.php", [
 structureChecks("brand evidence", $evOut);
 check("evidence: note rendered escaped", strpos($evOut, 'Eco-Score &lt;b&gt;B&lt;/b&gt; across 3 products') !== false);
 check("evidence: source link", strpos($evOut, '<a href="https://world.openfoodfacts.org/brand/x" target="_blank" rel="noopener noreferrer">Open Food Facts</a>') !== false);
-check("evidence: retrieved date", strpos($evOut, 'Retrieved 1 Nov 2026') !== false);
-check("evidence: only one expander (no note -> none)", substr_count($evOut, '<details class="score-evidence">') === 1);
+check("evidence: no collapsing", strpos($evOut, '<details class="score-evidence"') === false);
+check("evidence: score without note shows no evidence line", substr_count($evOut, 'score-evidence') === 1);
 check("evidence: unscored still Not assessed", strpos($evOut, 'Not assessed') !== false);
 $jsOut = renderTo("brand.php", [
     "title" => "Ev", "brand" => $evilRow, "alternatives" => [],
@@ -213,7 +214,55 @@ $jsOut = renderTo("brand.php", [
         "source_url" => "javascript:alert(1)", "retrieved_at" => null]],
     "chosen" => true,
 ]);
-check("evidence: non-http url not linked", strpos($jsOut, 'javascript:') === false && strpos($jsOut, 'Source:') !== false);
+check("evidence: non-http url not linked", strpos($jsOut, 'javascript:') === false && preg_match('~score-evidence">\s*n\s*&middot;\s*S\s*</div>~', $jsOut) === 1);
+
+section("brand.php worked calculation");
+function calcResult($out) {
+    return preg_match('~<strong class="score-calc-result">([^<]*)</strong>~', $out, $m) ? trim($m[1]) : null;
+}
+function renderCalc($values, $weights, $chosen) {
+    return renderTo("brand.php", [
+        "title" => "Calc", "brand" => $GLOBALS["evilRow"], "alternatives" => [],
+        "weights" => $weights,
+        "personal" => personal_score($values, $weights),
+        "breakdown" => score_breakdown($values, $weights),
+        "scores" => [], "chosen" => $chosen,
+    ]);
+}
+$calcValues = ["editorial" => 8, "environment" => 8.0, "welfare" => null,
+               "nutrition" => 6.0, "ownership" => 7];
+$before = personal_score($calcValues, default_weights());
+check("personal_score number unchanged", $before["score"] === 7.3);
+check("personal_score terms match covered", array_column($before["terms"], "key") === $before["covered"]);
+$o = renderCalc($calcValues, default_weights(), false);
+structureChecks("calc default", $o);
+check("calc: result equals headline (default)", calcResult($o) === rating_score($before["score"]));
+check("calc: term line", strpos($o, 'Nutrition 6.0 &times; 3 = 18.0') !== false);
+check("calc: sum and division", strpos($o, '(24.0 + 24.0 + 18.0 + 21.0) / (3 + 3 + 3 + 3) = 87.0 / 12') !== false);
+check("calc: plain average note", strpos($o, 'this is a plain average') !== false);
+check("calc: missing listed as excluded", preg_match('~Diet &amp; animal welfare:\s*no data \(excluded~', $o) === 1);
+
+$_COOKIE[PRIORITIES_COOKIE] = "editorial=5&environment=0&nutrition=2&welfare=4&ownership=1";
+$cw = current_weights();
+$custom = personal_score($calcValues, $cw);
+$o = renderCalc($calcValues, $cw, true);
+unset($_COOKIE[PRIORITIES_COOKIE]);
+check("calc: custom weights score", $custom["score"] === round((40 + 12 + 7) / 8, 1));
+check("calc: result equals headline (custom)", calcResult($o) === rating_score($custom["score"]));
+check("calc: weight 0 listed as ignored", preg_match('~Environment &amp; carbon:\s*weighted 0 \(ignored\)~', $o) === 1);
+check("calc: no plain-average note when chosen", strpos($o, 'plain average') === false);
+
+section("about.php scoring section");
+$o = renderTo("about.php", ["title" => "About"]);
+structureChecks("about scoring", $o);
+check("about: has section", strpos($o, 'How scores work') !== false);
+foreach (off_grade_map() as $g => $sc) {
+    check("about: grade $g", strpos($o, strtoupper($g) . " = " . rating_score($sc)) !== false);
+}
+check("about: label credits listed", substr_count($o, '<li>', strpos($o, 'welfare-labels')) >= count(off_welfare_labels()));
+check("about: acronym label name", strpos($o, 'RSPCA Assured: +2') !== false);
+check("about: soil association credit", strpos($o, 'Soil Association Organic: +2') !== false);
+check("about: ODbL kept", strpos($o, 'ODbL') !== false);
 
 section("contact.php template");
 $out = renderTo("contact.php", [

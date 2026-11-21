@@ -113,9 +113,14 @@ function clean_value($value, $max = 255)
  * site's 1-10 scale. Anything else, including "unknown" and "not-applicable",
  * returns null so it is recorded as not assessed rather than as a bad score.
  */
+function off_grade_map()
+{
+    return ["a" => 10.0, "b" => 8.0, "c" => 6.0, "d" => 4.0, "e" => 2.0];
+}
+
 function off_grade_to_score($grade)
 {
-    $grades = ["a" => 10.0, "b" => 8.0, "c" => 6.0, "d" => 4.0, "e" => 2.0];
+    $grades = off_grade_map();
 
     if (!is_string($grade))
     {
@@ -142,6 +147,20 @@ function off_welfare_labels()
         "en:marine-stewardship-council" => 1.5, "en:rainforest-alliance" => 1.0,
         "en:fairtrade" => 1.0, "en:fair-trade" => 1.0,
     ];
+}
+
+/**
+ * Human-readable name for an OFF label tag, e.g. "en:rspca-assured" ->
+ * "RSPCA Assured". Display only.
+ */
+function off_label_name($tag)
+{
+    $words = explode("-", preg_replace('/^[a-z]{2}:/', "", (string) $tag));
+    $upper = ["eu", "rspca"];
+
+    return implode(" ", array_map(function ($w) use ($upper) {
+        return in_array($w, $upper, true) ? strtoupper($w) : ucfirst($w);
+    }, $words));
 }
 
 /**
