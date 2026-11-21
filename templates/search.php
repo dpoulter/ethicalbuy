@@ -1,17 +1,18 @@
-<h3>Product Search</h3>
+<h3>Search</h3>
+<p class="text-muted">Search brands and products by name. The filters below apply to brands.</p>
 
 <form action="search.php" method="get" class="mb-4">
   <input type="hidden" name="submitted" value="1">
 
   <div class="row g-2 align-items-end">
     <div class="col-md-4">
-      <label for="search_string" class="form-label">Search for</label>
-      <input class="form-control" id="search_string" name="search_string" type="text"
-             placeholder="Brand or keyword" value="<?= e($filters["term"]) ?>" autofocus>
+      <label for="q" class="form-label">Search for</label>
+      <input class="form-control" id="q" name="q" type="search"
+             placeholder="Brand or product" value="<?= e($filters["term"]) ?>" autofocus>
     </div>
 
     <div class="col-md-2">
-      <label for="field" class="form-label">Search in</label>
+      <label for="field" class="form-label">Match brands on</label>
       <select class="form-select" id="field" name="field">
         <?php foreach (SEARCH_FIELDS as $f): ?>
           <option value="<?= e($f) ?>"<?= $filters["field"] === $f ? " selected" : "" ?>>
@@ -50,6 +51,7 @@
       <select class="form-select" id="sort" name="sort">
         <?php
           $sort_labels = [
+              "relevance"   => "Best match",
               "personal"    => "Best for your priorities",
               "brand"       => "Brand (A-Z)",
               "category"    => "Category",
@@ -76,8 +78,9 @@
 
   <?php require(TEMPLATE_DIR . "/partials/rating_legend.php"); ?>
 
+  <h4 class="mt-4">Brands</h4>
   <p class="text-muted">
-    <?= count($results) ?> result<?= count($results) === 1 ? "" : "s" ?>
+    <?= count($results) ?> brand<?= count($results) === 1 ? "" : "s" ?>
     <?php if ($filters["term"] !== ""): ?>
       for &ldquo;<?= e($filters["term"]) ?>&rdquo; in <?= e($filters["field"]) ?>
     <?php endif ?>
@@ -136,6 +139,68 @@
         </tbody>
       </table>
     </div>
+  <?php endif ?>
+
+  <?php
+    $products = $products ?? [];
+    $product_total = $product_total ?? 0;
+    $product_page = $product_page ?? 1;
+    $product_pages = $product_pages ?? 1;
+  ?>
+  <h4 class="mt-4" id="products">Products</h4>
+  <?php if ($filters["term"] === ""): ?>
+    <p class="text-muted">Enter a name to search products.</p>
+  <?php elseif (!$products): ?>
+    <div class="alert alert-info">No products matched &ldquo;<?= e($filters["term"]) ?>&rdquo;.</div>
+  <?php else: ?>
+    <p class="text-muted">
+      <?= (int) $product_total ?> product<?= $product_total === 1 ? "" : "s" ?> matched.
+      <?php if ($product_total > PRODUCT_SEARCH_CANDIDATES): ?>
+        Showing the <?= (int) PRODUCT_SEARCH_CANDIDATES ?> closest name matches; search more precisely to narrow it.
+      <?php endif ?>
+    </p>
+    <div class="table-responsive">
+      <table class="table align-middle search-products">
+        <thead>
+          <tr>
+            <th><?= $chosen ? "Your rating" : "Balanced" ?></th>
+            <th>Product</th>
+            <th>Brand</th>
+          </tr>
+        </thead>
+        <tbody>
+          <?php foreach ($products as $prod): ?>
+            <tr>
+              <td>
+                <?php
+                  $personal = $prod["personal"];
+                  $personal_compact = true;
+                  require(TEMPLATE_DIR . "/partials/personal_score.php");
+                ?>
+              </td>
+              <td>
+                <a href="product.php?code=<?= urlencode($prod["code"]) ?>">
+                  <?= e($prod["name"] !== null && $prod["name"] !== "" ? $prod["name"] : "Product " . $prod["code"]) ?>
+                </a>
+              </td>
+              <td><a href="brand.php?brand=<?= urlencode($prod["brand"]) ?>"><?= e($prod["brand"]) ?></a></td>
+            </tr>
+          <?php endforeach ?>
+        </tbody>
+      </table>
+    </div>
+    <?php
+      $pager_page = $product_page;
+      $pager_pages = $product_pages;
+      $pager_url = function ($n) use ($filters) {
+          return "search.php?" . http_build_query(array_filter([
+              "q" => $filters["term"], "field" => $filters["field"], "min_rating" => $filters["min_rating"],
+              "availability" => $filters["availability"], "sort" => $filters["sort"], "page" => $n,
+          ], function ($v) { return $v !== ""; })) . "#products";
+      };
+      require(TEMPLATE_DIR . "/partials/pager.php");
+    ?>
+    <p class="small text-muted">Product data from Open Food Facts (ODbL).</p>
   <?php endif ?>
 
 <?php endif ?>

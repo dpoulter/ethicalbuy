@@ -12,7 +12,7 @@
     </select>
   </div>
   <div class="col-md-6">
-    <a class="btn btn-outline-primary" href="/search.php">Search all brands</a>
+    <a class="btn btn-outline-primary" href="/search.php">Search brands and products</a>
     <a class="btn btn-outline-secondary" href="/priorities.php">
       <?= $chosen ? "Your priorities" : "Set your priorities" ?>
     </a>

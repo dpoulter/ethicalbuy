@@ -1065,3 +1065,41 @@ function like_escape($value)
 {
     return str_replace(["\\", "%", "_"], ["\\\\", "\\%", "\\_"], (string) $value);
 }
+
+/**
+ * Normalised form of a name for matching: lower case, accents removed,
+ * apostrophes removed, "&" and the word "and" dropped, other punctuation
+ * turned into single spaces. "Ben & Jerry's" and "ben-jerrys" both become
+ * "ben jerrys". Used for product search and for matching Open Food Facts
+ * brand tags to our brands.
+ */
+function search_key($text)
+{
+    $text = (string) $text;
+
+    if (class_exists("Normalizer"))
+    {
+        $text = preg_replace('/\p{Mn}+/u', "", Normalizer::normalize($text, Normalizer::FORM_D));
+    }
+    else
+    {
+        $converted = @iconv("UTF-8", "ASCII//TRANSLIT", $text);
+        $text = $converted === false ? $text : $converted;
+    }
+
+    $text = mb_strtolower($text);
+    $text = preg_replace("/['\x{2018}\x{2019}`]/u", "", $text);
+    $text = preg_replace('/[^\p{L}\p{N}]+/u', " ", $text);
+    $text = preg_replace('/(^| )and(?= |$)/', " ", $text);
+
+    return trim(preg_replace('/ +/', " ", $text));
+}
+
+/**
+ * Key for exact brand matching: search_key() with the spaces removed, so
+ * "Ben & Jerry's", "Ben and Jerrys" and the tag "ben-jerry-s" all agree.
+ */
+function brand_match_key($name)
+{
+    return str_replace(" ", "", search_key($name));
+}

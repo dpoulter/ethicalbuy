@@ -223,7 +223,7 @@ function off_mean_points($contributions)
  * One line describing how a dimension score is derived, built from the same
  * tables the maths uses. Null for dimensions the importer does not derive.
  */
-function off_dimension_method($dimension)
+function off_dimension_method($dimension, $per_product = false)
 {
     $grades = implode(", ", array_map(function ($g, $s) {
         return strtoupper($g) . " " . rating_score($s);
@@ -233,15 +233,21 @@ function off_dimension_method($dimension)
     switch ($dimension)
     {
         case "nutrition":
-            return "Nutri-Score letter per product: $grades. Brand score is the average.";
+            return $per_product
+                ? "Nutri-Score letter: $grades."
+                : "Nutri-Score letter per product: $grades. Brand score is the average.";
         case "environment":
-            return "Eco-Score (Green-Score) letter per product: $grades. Brand score is the average.";
+            return $per_product
+                ? "Eco-Score (Green-Score) letter: $grades."
+                : "Eco-Score (Green-Score) letter per product: $grades. Brand score is the average.";
         case "welfare":
             $credits = implode(", ", array_map(function ($tag, $c) {
                 return off_label_name($tag) . " +" . rtrim(rtrim(number_format($c, 1), "0"), ".");
             }, array_keys(off_welfare_labels()), off_welfare_labels()));
-            return "Each product starts at 5 and gains credit per recognised label ($credits), "
-                 . "capped at 10. Brand score is the average.";
+            return $per_product
+                ? "Starts at 5 and gains credit per recognised label ($credits), capped at 10."
+                : "Each product starts at 5 and gains credit per recognised label ($credits), "
+                  . "capped at 10. Brand score is the average.";
     }
 
     return null;
@@ -383,7 +389,52 @@ function map_off_product($product, $country = "en:united-kingdom")
         "source_licence" => OFF_LICENCE,
         "scores"         => $dimension_scores,
         "contributions"  => $contributions,
+
+        // the product itself, for the products table
+        "product"        => $code === null ? null : [
+            "code"       => $code,
+            "name"       => $product_label,
+            "category"   => $categories ? mb_substr((string) off_tag_to_name($categories[count($categories) - 1]), 0, 100) : null,
+            "labels"     => $certifications,
+            "source_url" => $product_url,
+            "brand_keys" => off_product_brand_keys($product),
+        ],
     ];
+}
+
+/**
+ * Every brand a product is tagged with, as brand_match_key() values: from the
+ * human-cased "brands" string and from the brands_tags slugs.
+ */
+function off_product_brand_keys($product)
+{
+    $names = [];
+
+    if (!empty($product["brands"]) && is_string($product["brands"]))
+    {
+        $names = explode(",", $product["brands"]);
+    }
+
+    foreach ((array) ($product["brands_tags"] ?? []) as $tag)
+    {
+        if (is_string($tag))
+        {
+            // strip an optional "xx:" language prefix
+            $names[] = preg_replace('/^[a-z]{2}:/', "", $tag);
+        }
+    }
+
+    $keys = [];
+    foreach ($names as $name)
+    {
+        $key = brand_match_key($name);
+        if ($key !== "")
+        {
+            $keys[$key] = true;
+        }
+    }
+
+    return array_keys($keys);
 }
 
 /**
@@ -396,6 +447,7 @@ function collapse_off_products($products, $country = "en:united-kingdom")
 {
     $brands = [];
     $samples = [];
+    $products_by_brand = [];
 
     foreach ($products as $product)
     {
@@ -406,6 +458,11 @@ function collapse_off_products($products, $country = "en:united-kingdom")
         }
 
         $key = mb_strtolower($mapped["name"]);
+
+        if ($mapped["product"] !== null)
+        {
+            $products_by_brand[$key][$mapped["product"]["code"]] = $mapped;
+        }
 
         if (!isset($brands[$key]))
         {
@@ -421,7 +478,7 @@ function collapse_off_products($products, $country = "en:united-kingdom")
 
         foreach ($mapped as $field => $value)
         {
-            if ($field === "scores" || $field === "contributions")
+            if ($field === "scores" || $field === "contributions" || $field === "product")
             {
                 continue;
             }
@@ -452,7 +509,9 @@ function collapse_off_products($products, $country = "en:united-kingdom")
         $brands[$key]["scores"] = $averaged;
         // per product, per dimension: what the averages above were taken over
         $brands[$key]["inputs"] = $samples[$key] ?? [];
-        unset($brands[$key]["contributions"]);
+        // every mapped product seen under this brand, one per barcode
+        $brands[$key]["products"] = array_values($products_by_brand[$key] ?? []);
+        unset($brands[$key]["contributions"], $brands[$key]["product"]);
     }
 
     return array_values($brands);
@@ -583,4 +642,223 @@ function off_brand_tag($name)
     $slug = preg_replace('/[^\p{L}\p{N}]+/u', "-", $slug);
 
     return trim($slug, "-");
+}
+
+/**
+ * The mapped products (from map_off_product()) that belong to a brand:
+ * those with a brand tag exactly equal to the brand's name after
+ * brand_match_key() normalisation. Never a fuzzy match. One per barcode.
+ */
+function off_products_for_brand($brand_name, $mapped_products)
+{
+    $key = brand_match_key($brand_name);
+    $out = [];
+
+    if ($key === "")
+    {
+        return [];
+    }
+
+    foreach ($mapped_products as $m)
+    {
+        $p = $m["product"] ?? null;
+
+        if ($p !== null && in_array($key, $p["brand_keys"], true) && !isset($out[$p["code"]]))
+        {
+            $out[$p["code"]] = $m;
+        }
+    }
+
+    return array_values($out);
+}
+
+/**
+ * Method line for a single product's score on a dimension.
+ */
+function off_product_method($dimension)
+{
+    return off_dimension_method($dimension, true);
+}
+
+/**
+ * Writes a brand's products and their scores, then recomputes the brand's
+ * Open Food Facts derived scores as the mean of its products' scores, all in
+ * one transaction so brand and products cannot disagree.
+ *
+ *   $mapped    products from map_off_product(); only those matching the brand
+ *              exactly (off_products_for_brand()) are written
+ *   $complete  true when this run fetched every page for the brand; only then
+ *              are products missing from the feed removed
+ *
+ * A product already filed under another brand is left there. A curated brand
+ * score is never overwritten. Returns true on success; $notes says what
+ * happened (or would happen, on a dry run).
+ */
+function save_brand_products($brand_id, $brand_name, $mapped, $apply, &$notes, $complete = false)
+{
+    $mine = off_products_for_brand($brand_name, $mapped);
+
+    if (!$apply)
+    {
+        $notes[] = count($mine) . " products" . ($complete ? "" : " (no removals: partial feed)");
+        foreach (off_scores_from_products($mine) as $dimension => $value)
+        {
+            $notes[] = "$dimension=$value";
+        }
+        return true;
+    }
+
+    if (query("START TRANSACTION") === false)
+    {
+        $notes[] = "could not start transaction";
+        return false;
+    }
+
+    $ok = true;
+    $kept = [];
+    $elsewhere = 0;
+
+    foreach ($mine as $m)
+    {
+        $p = $m["product"];
+
+        $owner = query("SELECT id, brand_id FROM products WHERE code = ?", $p["code"]);
+        $ok = $owner !== false;
+        if (!$ok) { break; }
+
+        if (!empty($owner) && (int) $owner[0]["brand_id"] !== (int) $brand_id)
+        {
+            $elsewhere++;
+            continue;
+        }
+
+        $ok = query(
+            "INSERT INTO products (brand_id, code, name, name_key, category, labels, source_url, retrieved_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, NOW())
+             ON DUPLICATE KEY UPDATE name = VALUES(name), name_key = VALUES(name_key),
+                 category = VALUES(category), labels = VALUES(labels),
+                 source_url = VALUES(source_url), retrieved_at = VALUES(retrieved_at)",
+            $brand_id, $p["code"], $p["name"], search_key($p["name"] ?? ""),
+            $p["category"], $p["labels"], $p["source_url"]
+        ) !== false;
+        if (!$ok) { break; }
+
+        $id = query("SELECT id FROM products WHERE code = ?", $p["code"]);
+        $ok = !empty($id);
+        if (!$ok) { break; }
+        $id = (int) $id[0]["id"];
+        $kept[] = $p["code"];
+
+        $ok = query("DELETE FROM product_scores WHERE product_id = ?", $id) !== false;
+
+        foreach ($m["contributions"] as $dimension => $c)
+        {
+            if (!$ok) { break; }
+            $ok = query(
+                "INSERT INTO product_scores (product_id, dimension, score, input) VALUES (?, ?, ?, ?)",
+                $id, $dimension, $c["points"], $c["input"]
+            ) !== false;
+        }
+        if (!$ok) { break; }
+    }
+
+    $removed = 0;
+    if ($ok && $complete)
+    {
+        $gone = $kept
+            ? query("SELECT id FROM products WHERE brand_id = ? AND code NOT IN ("
+                    . implode(",", array_fill(0, count($kept), "?")) . ")", $brand_id, ...$kept)
+            : query("SELECT id FROM products WHERE brand_id = ?", $brand_id);
+        $ok = $gone !== false;
+
+        foreach ($gone ?: [] as $g)
+        {
+            if (!$ok) { break; }
+            $ok = query("DELETE FROM products WHERE id = ?", $g["id"]) !== false;
+            $removed++;
+        }
+    }
+
+    // the brand's derived scores, from every product it now holds
+    if ($ok)
+    {
+        $rows = query(
+            "SELECT ps.dimension, ps.score AS points
+               FROM product_scores ps JOIN products p ON p.id = ps.product_id
+              WHERE p.brand_id = ?
+              ORDER BY p.id",
+            $brand_id
+        );
+        $ok = $rows !== false;
+
+        $by_dimension = [];
+        foreach ($rows ?: [] as $r)
+        {
+            $by_dimension[$r["dimension"]][] = $r;
+        }
+
+        foreach ($by_dimension as $dimension => $contributions)
+        {
+            if (!$ok) { break; }
+
+            $existing = query(
+                "SELECT source FROM brand_scores WHERE brand_id = ? AND dimension = ?",
+                $brand_id, $dimension
+            );
+            $ok = $existing !== false;
+
+            if ($ok && !empty($existing) && ($existing[0]["source"] ?? "") !== OFF_SOURCE)
+            {
+                $notes[] = "kept curated $dimension";
+                continue;
+            }
+
+            $value = off_mean_points($contributions);
+            $ok = $ok && query(
+                "INSERT INTO brand_scores
+                     (brand_id, dimension, score, note, source, source_url, retrieved_at)
+                 VALUES (?, ?, ?, ?, ?, ?, NOW())
+                 ON DUPLICATE KEY UPDATE score = VALUES(score), note = VALUES(note),
+                     source = VALUES(source), source_url = VALUES(source_url),
+                     retrieved_at = VALUES(retrieved_at)",
+                $brand_id, $dimension, $value, "Derived from Open Food Facts", OFF_SOURCE,
+                OFF_CANONICAL . "/brand/" . rawurlencode(off_brand_tag($brand_name))
+            ) !== false;
+
+            $notes[] = "$dimension=$value from " . count($contributions) . " products";
+        }
+    }
+
+    if (!$ok)
+    {
+        query("ROLLBACK");
+        $notes[] = "could not save products";
+        return false;
+    }
+
+    query("COMMIT");
+
+    $notes[] = count($kept) . " products";
+    if ($removed) { $notes[] = "removed $removed no longer listed"; }
+    if ($elsewhere) { $notes[] = "$elsewhere already filed under another brand"; }
+
+    return true;
+}
+
+/**
+ * Brand scores that save_brand_products() would derive from these mapped
+ * products (dry runs and tests).
+ */
+function off_scores_from_products($mapped)
+{
+    $by_dimension = [];
+    foreach ($mapped as $m)
+    {
+        foreach ($m["contributions"] as $dimension => $c)
+        {
+            $by_dimension[$dimension][] = $c;
+        }
+    }
+
+    return array_map("off_mean_points", $by_dimension);
 }

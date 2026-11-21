@@ -201,7 +201,9 @@ $evOut = renderTo("brand.php", [
     "personal" => personal_score($evValues, default_weights()),
     "breakdown" => score_breakdown($evValues, default_weights()),
     "scores" => ["environment" => $offScore(8), "nutrition" => $offScore(7.5)],
-    "inputs" => ["nutrition" => $nutriInputs],
+    // no products yet, so the working falls back to the 005 evidence rows
+    "derivations" => brand_derivations(["environment" => $offScore(8), "nutrition" => $offScore(7.5)],
+        [], ["nutrition" => $nutriInputs]),
     "chosen" => true,
 ]);
 structureChecks("brand derivation", $evOut);
@@ -228,7 +230,8 @@ $curOut = renderTo("brand.php", [
     "personal" => personal_score(["nutrition" => 4], default_weights()),
     "breakdown" => score_breakdown(["nutrition" => 4], default_weights()),
     "scores" => ["nutrition" => ["score" => 4, "note" => "x", "source" => "curated", "source_url" => null, "retrieved_at" => null]],
-    "inputs" => ["nutrition" => $nutriInputs], "chosen" => true,
+    "derivations" => brand_derivations(["nutrition" => ["score" => 4, "source" => "curated"]], [], ["nutrition" => $nutriInputs]),
+    "chosen" => true,
 ]);
 check("derivation: curated score ignores leftover inputs",
     strpos($curOut, 'derivation-products') === false && strpos($curOut, 'Entered by hand.') !== false);
@@ -243,7 +246,8 @@ $manyOut = renderTo("brand.php", [
     "weights" => default_weights(),
     "personal" => personal_score(["nutrition" => 10], default_weights()),
     "breakdown" => score_breakdown(["nutrition" => 10], default_weights()),
-    "scores" => ["nutrition" => $offScore(10)], "inputs" => ["nutrition" => $many],
+    "scores" => ["nutrition" => $offScore(10)],
+    "derivations" => brand_derivations(["nutrition" => $offScore(10)], [], ["nutrition" => $many]),
     "chosen" => true,
 ]);
 check("derivation: first 15 listed", strpos($manyOut, 'Item 14') !== false && strpos($manyOut, 'Item 15<') === false);
@@ -812,12 +816,12 @@ $tid = (int) ($tb[0]["id"] ?? 0);
 check("test brand created", $tid > 0);
 query("INSERT INTO brand_scores (brand_id, dimension, score, note, source) VALUES (?, 'welfare', 9, 'by hand', 'editor')", $tid);
 // the importer writes as its own database user, so run the saves as that user
-$child = function ($calls) use ($tid, $ic) {
+$child = function ($calls, $brandId = null) use ($tid) {
     $cmd = "DB_USER=" . escapeshellarg(getenv("IMPORT_DB_USER") ?: "ethicalbuy_import")
          . " DB_PASSWORD=" . escapeshellarg(getenv("IMPORT_DB_PASSWORD") ?: "ethicalbuy_import_dev")
          . " php " . escapeshellarg(__DIR__ . "/save_scores_child.php");
     $proc = proc_open($cmd, [0 => ["pipe", "r"], 1 => ["pipe", "w"]], $pipes);
-    fwrite($pipes[0], json_encode(["brand_id" => $tid, "calls" => $calls]));
+    fwrite($pipes[0], json_encode(["brand_id" => $brandId ?? $tid, "calls" => $calls]));
     fclose($pipes[0]);
     $out = stream_get_contents($pipes[1]);
     proc_close($proc);
@@ -848,6 +852,193 @@ $child([["scores" => ["environment" => 2.0], "url" => null, "apply" => false, "i
 check("dry run writes nothing", (float) query("SELECT score FROM brand_scores WHERE brand_id = ? AND dimension = 'environment'", $tid)[0]["score"] === 7.0);
 query("DELETE FROM brands WHERE id = ?", $tid);
 check("inputs cascade on brand delete", query("SELECT COUNT(*) AS n FROM brand_score_inputs WHERE brand_id = ?", $tid)[0]["n"] == 0);
+
+section("products: matching and saving (needs the dev database)");
+check("brand key: & and apostrophe", brand_match_key("Ben & Jerry's") === brand_match_key("ben-jerry-s"));
+check("brand key: accents", brand_match_key("Müller") === brand_match_key("muller"));
+check("brand key: near miss differs", brand_match_key("Alpron") !== brand_match_key("Alpro"));
+$pp = function ($code, $name, $brands, $tags, $nutri, $eco = null, $labels = []) {
+    return map_off_product(["code" => $code, "product_name" => $name, "brands" => $brands,
+        "brands_tags" => $tags, "countries_tags" => ["en:united-kingdom"],
+        "categories_tags" => ["en:beverages", "en:plant-based-milks"],
+        "nutriscore_grade" => $nutri, "ecoscore_grade" => $eco, "labels_tags" => $labels]);
+};
+$feed = [
+    $pp("9001", "Oat Drink", "Prodco", ["prodco"], "b", "a", ["en:vegan"]),
+    $pp("9002", "Soya Drink", "Prodco", ["prodco"], "c", "b"),
+    $pp("9003", "Almond Drink", "Prodco, Other Shop", ["prodco", "other-shop"], "a"),
+    $pp("9004", "Rice Drink", "Prodcos", ["prodcos"], "e"),          // near miss
+    $pp("9001", "Oat Drink", "Prodco", ["prodco"], "b", "a", ["en:vegan"]), // duplicate code
+];
+$mineP = off_products_for_brand("Prodco", $feed);
+check("exact tag match only, deduplicated", array_map(function ($m) { return $m["product"]["code"]; }, $mineP) === ["9001", "9002", "9003"]);
+check("near-miss brand matches nothing", off_products_for_brand("Prodc", $feed) === []);
+check("product category readable", $mineP[0]["product"]["category"] === "Plant based milks");
+// the old brand-level path and the product path give the same brand scores
+$rawFeed = [
+    ["code"=>"9001","product_name"=>"Oat Drink","brands"=>"Prodco","brands_tags"=>["prodco"],"countries_tags"=>["en:united-kingdom"],"nutriscore_grade"=>"b","ecoscore_grade"=>"a","labels_tags"=>["en:vegan"]],
+    ["code"=>"9002","product_name"=>"Soya Drink","brands"=>"Prodco","brands_tags"=>["prodco"],"countries_tags"=>["en:united-kingdom"],"nutriscore_grade"=>"c","ecoscore_grade"=>"b"],
+    ["code"=>"9003","product_name"=>"Almond Drink","brands"=>"Prodco, Other Shop","brands_tags"=>["prodco","other-shop"],"countries_tags"=>["en:united-kingdom"],"nutriscore_grade"=>"a"],
+];
+$oldScores = collapse_off_products($rawFeed)[0]["scores"];
+check("product path gives the same brand scores as before", off_scores_from_products($mineP) == $oldScores);
+
+query("DELETE FROM brands WHERE name IN ('Prodco', 'Prodc')");
+query("INSERT INTO brands (name, rating) VALUES ('Prodco', 6), ('Prodc', NULL)");
+$pid = (int) query("SELECT id FROM brands WHERE name = 'Prodco'")[0]["id"];
+$pid2 = (int) query("SELECT id FROM brands WHERE name = 'Prodc'")[0]["id"];
+query("INSERT INTO brand_scores (brand_id, dimension, score, note, source) VALUES (?, 'welfare', 3, 'by hand', 'curated')", $pid);
+$runP = function ($brandId, $calls) use ($child) { return $child($calls, $brandId); };
+$call = ["fn" => "products", "brand" => "Prodco", "mapped" => $feed, "apply" => true, "complete" => true];
+$r1 = $runP($pid, [$call, $call]);
+check("product save ok twice", ($r1[0]["ok"] ?? false) && ($r1[1]["ok"] ?? false));
+check("re-saving does not duplicate products", (int) query("SELECT COUNT(*) n FROM products WHERE brand_id = ?", $pid)[0]["n"] === 3);
+check("one score row per product dimension", (int) query("SELECT COUNT(*) n FROM product_scores ps JOIN products p ON p.id = ps.product_id WHERE p.brand_id = ?", $pid)[0]["n"] === 6);
+$bs = query("SELECT dimension, score, source FROM brand_scores WHERE brand_id = ? ORDER BY dimension", $pid);
+$means = query("SELECT ps.dimension, ROUND(AVG(ps.score), 1) m FROM product_scores ps JOIN products p ON p.id = ps.product_id WHERE p.brand_id = ? GROUP BY ps.dimension ORDER BY ps.dimension", $pid);
+check("brand score equals mean of product scores", (float) $bs[0]["score"] === (float) $means[0]["m"]
+    && (float) $bs[1]["score"] === (float) $means[1]["m"] && $bs[0]["dimension"] === "environment" && $bs[1]["dimension"] === "nutrition");
+check("brand scores identical to the old path", (float) $bs[0]["score"] === $oldScores["environment"] && (float) $bs[1]["score"] === $oldScores["nutrition"]);
+check("curated brand score kept", $bs[2]["source"] === "curated" && (float) $bs[2]["score"] === 3.0
+    && in_array("kept curated welfare", $r1[0]["notes"], true));
+check("product scores keep their input", query("SELECT ps.input FROM product_scores ps JOIN products p ON p.id = ps.product_id WHERE p.code = '9002' AND ps.dimension = 'nutrition'")[0]["input"] === "C");
+check("product name key stored", query("SELECT name_key FROM products WHERE code = '9001'")[0]["name_key"] === "oat drink");
+$r2 = $runP($pid2, [["fn" => "products", "brand" => "Prodc", "mapped" => $feed, "apply" => true, "complete" => true]]);
+check("near-miss brand gets no products", (int) query("SELECT COUNT(*) n FROM products WHERE brand_id = ?", $pid2)[0]["n"] === 0);
+$shorter = array_slice($feed, 0, 2);
+$runP($pid, [["fn" => "products", "brand" => "Prodco", "mapped" => $shorter, "apply" => true, "complete" => false]]);
+check("partial run removes nothing", (int) query("SELECT COUNT(*) n FROM products WHERE brand_id = ?", $pid)[0]["n"] === 3);
+$runP($pid, [["fn" => "products", "brand" => "Prodco", "mapped" => $shorter, "apply" => true, "complete" => true]]);
+check("complete run removes products no longer listed", (int) query("SELECT COUNT(*) n FROM products WHERE brand_id = ?", $pid)[0]["n"] === 2);
+check("brand score follows the remaining products", (float) query("SELECT score FROM brand_scores WHERE brand_id = ? AND dimension = 'nutrition'", $pid)[0]["score"] === 7.0);
+$runP($pid, [["fn" => "products", "brand" => "Prodco", "mapped" => $feed, "apply" => false, "complete" => true]]);
+check("dry run writes nothing", (int) query("SELECT COUNT(*) n FROM products WHERE brand_id = ?", $pid)[0]["n"] === 2);
+$runP($pid, [$call]);  // leave three products for the page tests below
+$prodBrandId = $pid;
+
+section("product page (needs the dev database)");
+// runs a public page in a child PHP process, so apologize()'s exit and the
+// HTTP status are exercised as on the site. Returns [status, html].
+function runPage($script, $get, $cookie = []) {
+    $code = '$_GET = json_decode(getenv("T_GET"), true); $_COOKIE = json_decode(getenv("T_COOKIE"), true);'
+          . '$_SERVER["REQUEST_METHOD"] = "GET";'
+          . 'register_shutdown_function(function () { file_put_contents("php://stderr", "STATUS:" . (http_response_code() ?: 200)); });'
+          . 'require ' . var_export(__DIR__ . "/../public/" . $script, true) . ';';
+    $env = array_merge(getenv(), ["T_GET" => json_encode($get), "T_COOKIE" => json_encode($cookie ?: new stdClass())]);
+    $proc = proc_open([PHP_BINARY, "-r", $code], [1 => ["pipe", "w"], 2 => ["pipe", "w"]], $pipes, null, $env);
+    $html = stream_get_contents($pipes[1]);
+    $err = stream_get_contents($pipes[2]);
+    proc_close($proc);
+    $status = preg_match('/STATUS:(\d+)/', $err, $m) ? (int) $m[1] : 0;
+    return [$status, $html];
+}
+[$st, $html] = runPage("product.php", ["code" => "9001"]);
+check("product: renders", $st === 200 && strpos($html, '<h3 class="card-title mb-0">Oat Drink</h3>') !== false);
+structureChecks("product page", $html);
+check("product: links up to brand", strpos($html, 'href="brand.php?brand=Prodco"') !== false);
+check("product: own dimensions have single working", substr_count($html, 'derivation-single') === 3);
+check("product: nutrition grade and points", preg_match('~Grade: B\s*= 8 points~', $html) === 1);
+check("product: welfare labels shown", preg_match('~Labels: Vegan\s*= 7 points~', $html) === 1);
+check("product: method line per product", strpos($html, 'Nutri-Score letter: A 10, B 8, C 6, D 4, E 2.') !== false);
+check("product: editorial inherited and labelled", strpos($html, "The brand&#039;s, not this product&#039;s") !== false
+    && strpos($html, 'Taken from the brand') !== false);
+check("product: ODbL attribution and OFF link", strpos($html, 'Open Database Licence (ODbL)') !== false
+    && strpos($html, 'href="https://world.openfoodfacts.org/product/9001" target="_blank" rel="noopener noreferrer"') !== false);
+check("product: overall working collapsed", strpos($html, '<details class="mt-4 score-working">') !== false);
+$pv = product_score_values(get_scores_for_products([query("SELECT id FROM products WHERE code='9001'")[0]["id"]])[(int) query("SELECT id FROM products WHERE code='9001'")[0]["id"]],
+    brand_score_values(["rating" => 6], get_brand_scores($prodBrandId)));
+check("product: headline uses the shared scoring", preg_match('~score-calc-result">' . preg_quote(rating_score(personal_score($pv, default_weights())["score"]), "~") . '<~', $html) === 1);
+[$st, $html] = runPage("product.php", ["code" => "9003"]);
+check("product: partly scored renders", $st === 200 && substr_count($html, 'Not assessed') === 3);  // environment, welfare, ownership
+check("product: missing dimension excluded", strpos($html, 'no data (excluded from the average') !== false);
+[$st, $html] = runPage("product.php", ["code" => "0000000"]);
+check("product: unknown code is 404 with apology", $st === 404 && strpos($html, "We don&#039;t have that product.") !== false);
+[$st, $html] = runPage("product.php", []);
+check("product: no code apologises", strpos($html, 'No product was specified.') !== false);
+$_COOKIE[PRIORITIES_COOKIE] = "editorial=0&environment=0&nutrition=5&welfare=0&ownership=0";
+[$st, $html] = runPage("product.php", ["code" => "9002"], [PRIORITIES_COOKIE => $_COOKIE[PRIORITIES_COOKIE]]);
+unset($_COOKIE[PRIORITIES_COOKIE]);
+check("product: priorities apply (nutrition only)", strpos($html, 'score-calc-result">6/10<') !== false);
+
+section("brand page products (needs the dev database)");
+// 30 products: 28 with a nutrition grade, 2 without, so a nutrition-only
+// reader sees two unscored products, which must sort last
+$grades = ["a", "b", "c", "d", "e"];
+$bulk = [];
+for ($i = 1; $i <= 30; $i++) {
+    $bulk[] = $pp(sprintf("77%04d", $i), "Bulk Item " . $i, "Prodco", ["prodco"], $i > 28 ? null : $grades[$i % 5]);
+}
+$runP($prodBrandId, [["fn" => "products", "brand" => "Prodco", "mapped" => array_merge($feed, $bulk), "apply" => true, "complete" => true]]);
+$nutriOnly = [PRIORITIES_COOKIE => "editorial=0&environment=0&nutrition=5&welfare=0&ownership=0"];
+[$st, $html] = runPage("brand.php", ["brand" => "Prodco"], $nutriOnly);
+check("brand products: section shown", $st === 200 && strpos($html, '33 products listed by Open Food Facts') !== false);
+structureChecks("brand products", $html);
+$tbl = substr($html, strpos($html, 'brand-products'));
+check("brand products: 25 per page", substr_count(substr($tbl, 0, strpos($tbl, '</table>')), 'href="product.php?code=') === 25);
+check("brand products: best first", strpos($tbl, '10/10') < strpos($tbl, '8/10') && strpos($tbl, '8/10') < strpos($tbl, '6/10'));
+check("brand products: pager", strpos($html, 'Page 1 of 2') !== false && strpos($html, 'pp=2#products') !== false);
+[$st, $html2] = runPage("brand.php", ["brand" => "Prodco", "pp" => "2"], $nutriOnly);
+$tbl2 = substr($html2, strpos($html2, 'brand-products'));
+$tbl2 = substr($tbl2, 0, strpos($tbl2, '</table>'));
+check("brand products: page 2 has the rest", substr_count($tbl2, 'href="product.php?code=') === 8);
+check("brand products: unscored last", preg_match('~Bulk Item 29.*No data for your priorities.*Bulk Item 30.*No data for your priorities\s*</span>\s*</td>(?:(?!href="product).)*$~s', $tbl2) === 1
+    || (strrpos($tbl2, 'No data for your priorities') > strrpos($tbl2, '/10')));
+[$st, $html3] = runPage("brand.php", ["brand" => "Prodco", "pq" => "oat"], $nutriOnly);
+$tbl3 = substr($html3, strpos($html3, 'brand-products'));
+$tbl3 = substr($tbl3, 0, strpos($tbl3, '</table>'));
+check("brand products: name filter", substr_count($tbl3, 'href="product.php?code=') === 1 && strpos($tbl3, 'Oat Drink') !== false);
+[$st, $html4] = runPage("brand.php", ["brand" => "Prodco", "pq" => "zzz"]);
+check("brand products: filter with no match", strpos($html4, 'No products match &ldquo;zzz&rdquo;') !== false);
+$nutriMean = (float) query("SELECT score FROM brand_scores WHERE brand_id = ? AND dimension = 'nutrition'", $prodBrandId)[0]["score"];
+check("brand working read from products", preg_match('~derivation-products.*?href="product.php\?code=\d+">~s', $html) === 1
+    && preg_match('~derivation-sum">[^<]*\) / 31 = ' . preg_quote(number_format($nutriMean, 1)) . '~', $html) === 1);
+
+section("search: brands and products (needs the dev database)");
+query("DELETE FROM brands WHERE name IN ('Bén & Jerry''s Test', 'Oatsome Test')");
+query("INSERT INTO brands (name, rating) VALUES ('Bén & Jerry''s Test', 7), ('Oatsome Test', 5)");
+$bj = (int) query("SELECT id FROM brands WHERE name = 'Bén & Jerry''s Test'")[0]["id"];
+$runP($bj, [["fn" => "products", "brand" => "Bén & Jerry's Test", "apply" => true, "complete" => true, "mapped" => [
+    $pp("880001", "Cookie Dough & Brownie", "Bén & Jerry's Test", ["ben-jerry-s-test"], "e"),
+    $pp("880002", "Crème Brûlée Pot", "Bén & Jerry's Test", ["ben-jerry-s-test"], "d"),
+    $pp("880003", "Chunky Monkey's Banana", "Bén & Jerry's Test", ["ben-jerry-s-test"], "d"),
+]]]);
+[$st, $html] = runPage("search.php", ["q" => "oat"]);
+structureChecks("search groups", $html);
+check("search: two groups in order", $st === 200 && strpos($html, '<h4 class="mt-4">Brands</h4>') !== false
+    && strpos($html, '<h4 class="mt-4">Brands</h4>') < strpos($html, 'id="products">Products</h4>'));
+$brandsPart = substr($html, 0, strpos($html, 'id="products">Products</h4>'));
+$productsPart = substr($html, strpos($html, 'id="products">Products</h4>'));
+check("search: brand matched by name", strpos($brandsPart, 'Oatsome Test') !== false);
+check("search: product matched and linked", strpos($productsPart, 'href="product.php?code=9001"') !== false
+    && strpos($productsPart, 'href="brand.php?brand=Prodco">Prodco</a>') !== false);
+check("search: product group has no brand-only matches", strpos($productsPart, 'Oatsome Test') === false);
+[$st, $html] = runPage("search.php", ["q" => "Ben & Jerrys"]);
+check("search: & and missing apostrophe find the brand", strpos($html, 'Bén &amp; Jerry&#039;s Test') !== false);
+[$st, $html] = runPage("search.php", ["q" => "creme brulee"]);
+check("search: accents ignored", strpos($html, 'Crème Brûlée Pot') !== false);
+[$st, $html] = runPage("search.php", ["q" => "monkeys"]);
+check("search: apostrophe in product name", strpos($html, 'Chunky Monkey&#039;s Banana') !== false);
+[$st, $html] = runPage("search.php", ["q" => "cookie and brownie"]);
+check("search: 'and' matches '&'", strpos($html, 'Cookie Dough &amp; Brownie') !== false);
+[$st, $html] = runPage("search.php", ["q" => "o'"]);
+check("search: short term with apostrophe does not error", $st === 200 && strpos($html, 'Search Results') !== false);
+[$st, $html] = runPage("search.php", ["q" => ""]);
+check("search: empty query lists brands, asks for a product name", $st === 200
+    && strpos($html, 'Enter a name to search products.') !== false && strpos($html, 'Prodco') !== false);
+[$st, $html] = runPage("search.php", ["q" => "the"]);
+check("search: stopword query does not error", $st === 200);
+[$st, $html] = runPage("search.php", ["search_string" => "Prodco"]);
+check("search: old parameter still works", strpos($html, 'href="brand.php?brand=Prodco"') !== false);
+[$st, $html] = runPage("search.php", ["q" => "bulk"]);
+check("search: products paginated", strpos($html, '30 products matched') !== false && strpos($html, 'Page 1 of 2') !== false
+    && substr_count($html, 'href="product.php?code=') === 25);
+[$st, $html] = runPage("search.php", ["q" => "bulk", "page" => "2"]);
+check("search: page 2", substr_count($html, 'href="product.php?code=') === 5);
+[$st, $html] = runPage("search.php", ["q" => "Bulk Item 1"]);
+check("search: exact name first", preg_match('~search-products.*?href="product.php\?code=770001"~s', $html) === 1);
+[$st, $html] = runPage("index.php", []);
+check("nav: menu says Search", strpos($html, '>Search</a>') !== false && strpos($html, 'Product Search') === false);
+query("DELETE FROM brands WHERE name IN ('Bén & Jerry''s Test', 'Oatsome Test', 'Prodco', 'Prodc')");
 
 echo $fails === 0 ? "\nALL PASS\n" : "\n$fails FAILURE(S)\n";
 exit($fails === 0 ? 0 : 1);

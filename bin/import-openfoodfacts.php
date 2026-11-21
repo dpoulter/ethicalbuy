@@ -15,11 +15,13 @@
  *   * never overwrites a value that is already present, so your edits win
  *   * records source, URL, licence and retrieval time on every row it touches
  *
- *   php bin/import-openfoodfacts.php --refresh-scores --contact=you@example.com [--apply]
+ *   php bin/import-openfoodfacts.php --products --contact=you@example.com [--apply]
  *
- * re-fetches products for brands that already hold Open Food Facts scores and
- * rewrites only those derived scores and the per-product inputs behind them.
- * It never touches ratings, notes, owners, brand fields or curated scores.
+ * fetches every UK product for each brand already in the database, writes the
+ * products and their scores, and recomputes each brand's Open Food Facts
+ * derived scores as the mean of its products. It never creates brands and
+ * never touches ratings, notes, owners, brand fields or curated scores.
+ * --refresh-scores is an older name for the same thing.
  *
  * Open Food Facts is ODbL 1.0. You may reuse it commercially with attribution,
  * and a derived database must be shared alike. The public site credits it via
@@ -44,7 +46,7 @@ ini_set("display_errors", "1");
 
 $options = getopt("", [
     "category::", "brand::", "country::", "contact::", "pages::",
-    "limit::", "delay::", "apply", "dump", "help", "refresh-scores",
+    "limit::", "delay::", "apply", "dump", "help", "refresh-scores", "products",
 ]);
 
 if (isset($options["help"]))
@@ -62,10 +64,11 @@ Usage: php bin/import-openfoodfacts.php --contact=you@example.com [options]
   --delay=SECONDS   Pause between requests (default 6, be polite)
   --dump            Print the first raw product and exit. Use this on the
                     first run to confirm the API's field names.
-  --refresh-scores  Re-fetch products for every brand that already has an
-                    Open Food Facts score and rewrite only those scores and
-                    their per-product inputs. --pages, --limit, --delay and
-                    --country apply per brand. Nothing else is touched.
+  --products        For every brand already here, fetch all its UK products
+                    and write them with their scores; brand scores are
+                    recomputed as the mean of their products. Creates no
+                    brands. --pages (default 20 here), --limit, --delay and
+                    --country apply per brand. --refresh-scores is an alias.
   --apply           Actually write. Without it, this is a dry run.
 
 TXT);
@@ -85,12 +88,13 @@ $category = trim((string) ($options["category"] ?? ""));
 $brand    = trim((string) ($options["brand"] ?? ""));
 $country  = trim((string) ($options["country"] ?? "en:united-kingdom"));
 $country  = ($country === "any" || $country === "") ? null : $country;
-$pages    = max(1, (int) ($options["pages"] ?? 1));
+$refresh  = isset($options["refresh-scores"]) || isset($options["products"]);
+// enough pages to cover the largest UK brands when backfilling products
+$pages    = max(1, (int) ($options["pages"] ?? ($refresh ? 20 : 1)));
 $limit    = (int) ($options["limit"] ?? 0);
 $delay    = max(0, (int) ($options["delay"] ?? 6));
 $apply    = isset($options["apply"]);
 $dump     = isset($options["dump"]);
-$refresh  = isset($options["refresh-scores"]);
 
 if (!$refresh && $category === "" && $brand === "")
 {
@@ -284,9 +288,9 @@ function upsert_brand($b, $apply, &$notes)
         $fresh = query("SELECT id FROM brands WHERE name = ? LIMIT 1", $b["name"]);
         $new_id = empty($fresh) ? null : (int) $fresh[0]["id"];
 
-        if ($new_id !== null && !empty($b["scores"]))
+        if ($new_id !== null)
         {
-            save_dimension_scores($new_id, $b["scores"], $b["source_url"], $apply, $notes, $b["inputs"] ?? []);
+            save_brand_products($new_id, $b["name"], $b["products"], $apply, $notes);
         }
 
         return "created";
@@ -297,10 +301,9 @@ function upsert_brand($b, $apply, &$notes)
 
     // dimension scores are refreshed even when the brand's own fields are
     // already filled in, since they carry their own provenance
-    if (!empty($b["scores"]))
-    {
-        save_dimension_scores((int) $row["id"], $b["scores"], $b["source_url"], $apply, $notes, $b["inputs"] ?? []);
-    }
+    // a category run sees only some of a brand's products, so it adds and
+    // updates but never removes (that needs --products)
+    save_brand_products((int) $row["id"], $b["name"], $b["products"], $apply, $notes);
 
     $sets = [];
     $params = [];
@@ -359,9 +362,11 @@ fwrite(STDOUT, "country: " . ($country ?? "any") . "\n\n");
  * Fetches up to $pages pages of products. Exits on a fetch error unless
  * $soft, in which case it returns null.
  */
-function fetch_products($category, $brand, $pages, $delay, $agent, $dump, $soft = false)
+function fetch_products($category, $brand, $pages, $delay, $agent, $dump, $soft = false, &$complete = null)
 {
     $products = [];
+    // true only once a short page shows we have reached the end
+    $complete = false;
 
     for ($page = 1; $page <= $pages; $page++)
     {
@@ -394,6 +399,7 @@ function fetch_products($category, $brand, $pages, $delay, $agent, $dump, $soft 
 
         if (count($batch) < 100)
         {
+            $complete = true;
             break;
         }
 
@@ -408,18 +414,12 @@ function fetch_products($category, $brand, $pages, $delay, $agent, $dump, $soft 
 
 if ($refresh)
 {
-    // only brands that already carry an OFF-derived score
-    $targets = query(
-        "SELECT DISTINCT b.id, b.name
-           FROM brands b
-           JOIN brand_scores s ON s.brand_id = b.id AND s.source = ?
-          ORDER BY b.name",
-        OFF_SOURCE
-    );
+    // every brand we already hold; this mode never creates one
+    $targets = query("SELECT id, name FROM brands ORDER BY name");
 
     if ($targets === false)
     {
-        fwrite(STDERR, "Could not read brands with Open Food Facts scores.\n");
+        fwrite(STDERR, "Could not read brands.\n");
         exit(1);
     }
 
@@ -428,9 +428,9 @@ if ($refresh)
         $targets = array_slice($targets, 0, $limit);
     }
 
-    fwrite(STDOUT, count($targets) . " brands with Open Food Facts scores\n\n");
+    fwrite(STDOUT, count($targets) . " brands\n\n");
 
-    $stats = ["refreshed" => 0, "not found" => 0, "failed" => 0];
+    $stats = ["updated" => 0, "no products" => 0, "failed" => 0];
 
     foreach ($targets as $i => $t)
     {
@@ -439,46 +439,45 @@ if ($refresh)
             sleep($delay);
         }
 
-        $products = fetch_products("", off_brand_tag($t["name"]), $pages, $delay, $agent, false, true);
+        $complete = false;
+        $raw = fetch_products("", off_brand_tag($t["name"]), $pages, $delay, $agent, false, true, $complete);
         $notes = [];
 
-        if ($products === null)
+        if ($raw === null)
         {
+            // a failed fetch must not be mistaken for "the brand has no products"
             $stats["failed"]++;
-            fwrite(STDOUT, "  failed    {$t["name"]}\n");
+            fwrite(STDOUT, "  failed      {$t["name"]}  (nothing changed)\n");
             continue;
         }
 
-        // the search may return other brands sharing a product; keep ours
-        $match = null;
-        foreach (collapse_off_products($products, $country) as $b)
-        {
-            if (mb_strtolower($b["name"]) === mb_strtolower($t["name"]))
-            {
-                $match = $b;
-                break;
-            }
-        }
+        $mapped = array_values(array_filter(array_map(function ($p) use ($country) {
+            return map_off_product($p, $country);
+        }, $raw)));
 
-        if ($match === null || empty($match["scores"]))
+        if (!off_products_for_brand($t["name"], $mapped))
         {
-            $stats["not found"]++;
-            fwrite(STDOUT, "  not found {$t["name"]}  (existing scores left as they are)\n");
+            $stats["no products"]++;
+            fwrite(STDOUT, "  no products {$t["name"]}  (nothing changed)\n");
             continue;
         }
 
-        $ok = save_dimension_scores((int) $t["id"], $match["scores"], $match["source_url"],
-            $apply, $notes, $match["inputs"]);
+        if (!$complete)
+        {
+            $notes[] = "stopped at $pages pages";
+        }
 
-        $stats[$ok ? "refreshed" : "failed"]++;
-        fwrite(STDOUT, sprintf("  %-9s %s%s\n", $ok ? "refreshed" : "failed", $t["name"],
+        $ok = save_brand_products((int) $t["id"], $t["name"], $mapped, $apply, $notes, $complete);
+
+        $stats[$ok ? "updated" : "failed"]++;
+        fwrite(STDOUT, sprintf("  %-11s %s%s\n", $ok ? "updated" : "failed", $t["name"],
             $notes ? "  (" . implode("; ", $notes) . ")" : ""));
     }
 
     fwrite(STDOUT, "\n");
     foreach ($stats as $key => $count)
     {
-        fwrite(STDOUT, sprintf("  %-9s %d\n", $key, $count));
+        fwrite(STDOUT, sprintf("  %-11s %d\n", $key, $count));
     }
 
     if (!$apply)
