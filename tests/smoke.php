@@ -182,6 +182,39 @@ check("brand: alternative link urlencoded", strpos($out, 'brand.php?brand=Other%
 check("brand: breadcrumb category link urlencoded", strpos($out, 'search_string=Baby%27s+%22Food%22') !== false);
 check("brand: alternative rating badge", strpos($out, '3/10') !== false);
 
+section("brand.php score evidence");
+$evValues = ["environment" => 8, "nutrition" => 6, "welfare" => null];
+$evOut = renderTo("brand.php", [
+    "title" => "Ev", "brand" => $evilRow, "alternatives" => [],
+    "weights" => default_weights(),
+    "personal" => personal_score($evValues, default_weights()),
+    "breakdown" => score_breakdown($evValues, default_weights()),
+    "scores" => [
+        "environment" => ["dimension" => "environment", "score" => 8,
+            "note" => "Eco-Score <b>B</b> across 3 products", "source" => "Open Food Facts",
+            "source_url" => "https://world.openfoodfacts.org/brand/x", "retrieved_at" => "2026-11-01 10:00:00"],
+        "nutrition" => ["dimension" => "nutrition", "score" => 6,
+            "note" => null, "source" => null, "source_url" => null, "retrieved_at" => null],
+    ],
+    "chosen" => true,
+]);
+structureChecks("brand evidence", $evOut);
+check("evidence: note rendered escaped", strpos($evOut, 'Eco-Score &lt;b&gt;B&lt;/b&gt; across 3 products') !== false);
+check("evidence: source link", strpos($evOut, '<a href="https://world.openfoodfacts.org/brand/x" target="_blank" rel="noopener noreferrer">Open Food Facts</a>') !== false);
+check("evidence: retrieved date", strpos($evOut, 'Retrieved 1 Nov 2026') !== false);
+check("evidence: only one expander (no note -> none)", substr_count($evOut, '<details class="score-evidence">') === 1);
+check("evidence: unscored still Not assessed", strpos($evOut, 'Not assessed') !== false);
+$jsOut = renderTo("brand.php", [
+    "title" => "Ev", "brand" => $evilRow, "alternatives" => [],
+    "weights" => default_weights(),
+    "personal" => personal_score($evValues, default_weights()),
+    "breakdown" => score_breakdown($evValues, default_weights()),
+    "scores" => ["environment" => ["score" => 8, "note" => "n", "source" => "S",
+        "source_url" => "javascript:alert(1)", "retrieved_at" => null]],
+    "chosen" => true,
+]);
+check("evidence: non-http url not linked", strpos($jsOut, 'javascript:') === false && strpos($jsOut, 'Source:') !== false);
+
 section("contact.php template");
 $out = renderTo("contact.php", [
     "title" => "Contact",

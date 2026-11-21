@@ -121,7 +121,42 @@
         <tbody>
           <?php foreach ($breakdown as $row): ?>
             <tr<?= $row["counted"] ? "" : ' class="text-muted"' ?>>
-              <td><?= e($row["label"]) ?></td>
+              <?php
+                $ev = ($row["score"] !== null) ? ($scores[$row["key"]] ?? []) : [];
+                $evNote = trim((string) ($ev["note"] ?? ""));
+                $evSource = trim((string) ($ev["source"] ?? ""));
+                $evUrl = trim((string) ($ev["source_url"] ?? ""));
+                $evUrlOk = preg_match('~^https?://~i', $evUrl) === 1;
+                $evDate = trim((string) ($ev["retrieved_at"] ?? ""));
+                $evTime = $evDate !== "" ? strtotime($evDate) : false;
+                $hasEvidence = $evNote !== "" || $evSource !== "";
+              ?>
+              <td>
+                <?php if ($hasEvidence): ?>
+                  <details class="score-evidence">
+                    <summary><?= e($row["label"]) ?></summary>
+                    <div class="small text-muted mt-1">
+                      <?php if ($evNote !== ""): ?>
+                        <div><?= e($evNote) ?></div>
+                      <?php endif ?>
+                      <?php if ($evSource !== ""): ?>
+                        <div>Source:
+                          <?php if ($evUrlOk): ?>
+                            <a href="<?= e($evUrl) ?>" target="_blank" rel="noopener noreferrer"><?= e($evSource) ?></a>
+                          <?php else: ?>
+                            <?= e($evSource) ?>
+                          <?php endif ?>
+                        </div>
+                      <?php endif ?>
+                      <?php if ($evTime): ?>
+                        <div>Retrieved <?= e(date("j M Y", $evTime)) ?></div>
+                      <?php endif ?>
+                    </div>
+                  </details>
+                <?php else: ?>
+                  <?= e($row["label"]) ?>
+                <?php endif ?>
+              </td>
               <td>
                 <?= e(weight_label($row["weight"])) ?>
                 <?php if ($row["weight"] === 0): ?>
