@@ -185,10 +185,16 @@ function brand_derivations($stored_scores, $products, $legacy_inputs)
 
     foreach ($stored_scores as $dimension => $stored)
     {
+        if ($dimension === "ownership" && ($stored["source"] ?? "") === OWNERSHIP_SOURCE)
+        {
+            $out[$dimension] = ownership_derivation($stored);
+            continue;
+        }
+
         if (($stored["source"] ?? "") !== OFF_SOURCE)
         {
             // a hand edit in /admin supersedes any derived evidence
-            $out[$dimension] = ["kind" => "hand"];
+            $out[$dimension] = ["kind" => "hand", "note" => $stored["note"] ?? null];
             continue;
         }
 
@@ -230,11 +236,14 @@ function brand_derivations($stored_scores, $products, $legacy_inputs)
 /**
  * How each of a product's dimension scores was reached.
  */
-function product_derivations($product_scores, $brand_name)
+function product_derivations($product_scores, $brand_name, $brand_derivations = [])
 {
+    // the brand's own working, shown under "taken from the brand"
     $out = [
-        "editorial" => ["kind" => "inherited", "brand" => $brand_name],
-        "ownership" => ["kind" => "inherited", "brand" => $brand_name],
+        "editorial" => ["kind" => "inherited", "brand" => $brand_name,
+                        "from" => $brand_derivations["editorial"] ?? ["kind" => "hand"]],
+        "ownership" => ["kind" => "inherited", "brand" => $brand_name,
+                        "from" => $brand_derivations["ownership"] ?? ["kind" => "hand"]],
     ];
 
     foreach ($product_scores as $dimension => $s)
@@ -368,4 +377,29 @@ function rank_brand_results($rows, $term, $field)
     });
 
     return $ranked;
+}
+
+/**
+ * Working for an ownership score written by bin/score-ownership.php. The
+ * recorded type is read back from the stored note, so the page explains the
+ * score as it was written, even if brands.type has changed since and the
+ * script has not been re-run.
+ */
+function ownership_derivation($stored)
+{
+    $type = null;
+    if (preg_match('/^Recorded as "(.*)"; counted as /', (string) ($stored["note"] ?? ""), $m))
+    {
+        $type = $m[1];
+    }
+
+    $category = $type === null ? null : ownership_category_for_type($type);
+
+    return [
+        "kind"     => "ownership",
+        "type"     => $type,
+        "category" => $category,
+        "note"     => $stored["note"] ?? null,
+        "points"   => (float) $stored["score"],
+    ];
 }

@@ -948,6 +948,56 @@ function admin_save_brand_score($brand_id, $dimension, $score, $note)
 }
 
 /**
+ * Applies the /admin scores form for one brand. Returns [dimension => error].
+ *
+ * Only rows the editor actually changed are written, and those become
+ * "curated". A row submitted unchanged keeps its source, so saving the form
+ * does not turn an imported or type-mapped score into a hand entry that the
+ * importers would then refuse to refresh.
+ */
+function admin_save_brand_scores($brand_id, $post)
+{
+    $errors = [];
+    $existing = get_brand_scores($brand_id);
+
+    foreach (stored_dimensions() as $dimension)
+    {
+        $value = input_string($post, "score_" . $dimension);
+        $note = input_string($post, "note_" . $dimension);
+        $have = $existing[$dimension] ?? null;
+
+        // blank means "we don't know", which is not the same as a low score
+        if ($value === "")
+        {
+            if ($have !== null)
+            {
+                admin_delete_brand_score($brand_id, $dimension);
+            }
+            continue;
+        }
+
+        if (!is_numeric($value) || (float) $value < 1 || (float) $value > 10)
+        {
+            $errors[$dimension] = "Scores run from 1 to 10, or leave blank for not assessed.";
+            continue;
+        }
+
+        if ($have !== null && (float) $have["score"] === (float) $value
+            && (string) ($have["note"] ?? "") === $note)
+        {
+            continue;
+        }
+
+        if (!admin_save_brand_score($brand_id, $dimension, (float) $value, $note === "" ? null : $note))
+        {
+            $errors[$dimension] = "Could not save that score.";
+        }
+    }
+
+    return $errors;
+}
+
+/**
  * Removes a dimension score, returning it to "we don't know".
  */
 function admin_delete_brand_score($brand_id, $dimension)

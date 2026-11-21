@@ -93,8 +93,28 @@
   <?php endforeach ?>
 </ul>
 
-<h5><?= e($dims["editorial"]["label"]) ?> and <?= e($dims["ownership"]["label"]) ?></h5>
-<p>Entered by hand by us. These are not imported.</p>
+<h5><?= e($dims["ownership"]["label"]) ?></h5>
+<p class="mb-1">
+  Scored from the type of owner we have recorded for the brand. Each recorded
+  type counts as one of the categories below; a type not in the list is left
+  unscored rather than guessed. A score we enter by hand replaces this.
+  Business size is not scored yet.
+</p>
+<table class="table table-sm ownership-table">
+  <thead><tr><th>Category</th><th>Points</th><th>Meaning</th></tr></thead>
+  <tbody>
+    <?php foreach (ownership_categories() as $c): ?>
+      <tr>
+        <td><?= e($c["label"]) ?></td>
+        <td><?= (int) $c["points"] ?></td>
+        <td><?= e($c["meaning"]) ?></td>
+      </tr>
+    <?php endforeach ?>
+  </tbody>
+</table>
+
+<h5><?= e($dims["editorial"]["label"]) ?></h5>
+<p>Entered by hand by us. It is not imported.</p>
 
 <h5>Brands with several products</h5>
 <p>

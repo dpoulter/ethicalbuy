@@ -36,39 +36,7 @@ if ($_SERVER["REQUEST_METHOD"] === "POST")
     }
     else
     {
-        $saved = 0;
-        $cleared = 0;
-
-        foreach (stored_dimensions() as $dimension)
-        {
-            $value = input_string($_POST, "score_" . $dimension);
-            $note = input_string($_POST, "note_" . $dimension);
-
-            // blank means "we don't know", which is not the same as a low score
-            if ($value === "")
-            {
-                if (admin_delete_brand_score($id, $dimension))
-                {
-                    $cleared++;
-                }
-                continue;
-            }
-
-            if (!is_numeric($value) || (float) $value < 1 || (float) $value > 10)
-            {
-                $errors[$dimension] = "Scores run from 1 to 10, or leave blank for not assessed.";
-                continue;
-            }
-
-            if (admin_save_brand_score($id, $dimension, (float) $value, $note === "" ? null : $note))
-            {
-                $saved++;
-            }
-            else
-            {
-                $errors[$dimension] = "Could not save that score.";
-            }
-        }
+        $errors = admin_save_brand_scores($id, $_POST);
 
         if (!$errors)
         {
