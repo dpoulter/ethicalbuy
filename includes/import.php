@@ -190,6 +190,64 @@ function off_welfare_score($labels)
 }
 
 /**
+ * The recognised welfare labels on a product, as display names.
+ */
+function off_recognised_welfare_labels($labels)
+{
+    $known = off_welfare_labels();
+    $out = [];
+
+    foreach ((array) $labels as $tag)
+    {
+        if (is_string($tag) && isset($known[$tag]))
+        {
+            $out[] = off_label_name($tag);
+        }
+    }
+
+    return $out;
+}
+
+/**
+ * A brand's score for one dimension: the mean of what each product
+ * contributed, to one decimal. The only place this rounding lives.
+ */
+function off_mean_points($contributions)
+{
+    $points = array_map(function ($c) { return (float) $c["points"]; }, $contributions);
+
+    return round(array_sum($points) / count($points), 1);
+}
+
+/**
+ * One line describing how a dimension score is derived, built from the same
+ * tables the maths uses. Null for dimensions the importer does not derive.
+ */
+function off_dimension_method($dimension)
+{
+    $grades = implode(", ", array_map(function ($g, $s) {
+        return strtoupper($g) . " " . rating_score($s);
+    }, array_keys(off_grade_map()), off_grade_map()));
+    $grades = str_replace("/10", "", $grades);
+
+    switch ($dimension)
+    {
+        case "nutrition":
+            return "Nutri-Score letter per product: $grades. Brand score is the average.";
+        case "environment":
+            return "Eco-Score (Green-Score) letter per product: $grades. Brand score is the average.";
+        case "welfare":
+            $credits = implode(", ", array_map(function ($tag, $c) {
+                return off_label_name($tag) . " +" . rtrim(rtrim(number_format($c, 1), "0"), ".");
+            }, array_keys(off_welfare_labels()), off_welfare_labels()));
+            return "Each product starts at 5 and gains credit per recognised label ($credits), "
+                 . "capped at 10. Brand score is the average.";
+    }
+
+    return null;
+}
+
+/**
  * Maps one Open Food Facts product into the fields the brands table holds.
  *
  * Returns null when the product cannot be used -- no brand name, or not sold
@@ -279,13 +337,35 @@ function map_off_product($product, $country = "en:united-kingdom")
     // per-dimension scores, so a reader can weight them themselves.
     // "environmental_score_grade" is the newer name for "ecoscore_grade";
     // accept either so a rename upstream does not silently drop the data.
+    $env_grade = $product["environmental_score_grade"] ?? $product["ecoscore_grade"] ?? null;
+    $nutri_grade = $product["nutriscore_grade"] ?? null;
+    $labels = $product["labels_tags"] ?? [];
+
     $dimension_scores = array_filter([
-        "environment" => off_grade_to_score(
-            $product["environmental_score_grade"] ?? $product["ecoscore_grade"] ?? null
-        ),
-        "nutrition"   => off_grade_to_score($product["nutriscore_grade"] ?? null),
-        "welfare"     => off_welfare_score($product["labels_tags"] ?? []),
+        "environment" => off_grade_to_score($env_grade),
+        "nutrition"   => off_grade_to_score($nutri_grade),
+        "welfare"     => off_welfare_score($labels),
     ], function ($v) { return $v !== null; });
+
+    // what each score was derived from, kept so the brand page can show it
+    $product_url = $code === null ? OFF_CANONICAL : OFF_CANONICAL . "/product/" . rawurlencode($code);
+    $product_label = clean_value($product["product_name"] ?? null, 255);
+    $contributions = [];
+
+    foreach ($dimension_scores as $dimension => $points)
+    {
+        $input = $dimension === "welfare"
+            ? implode(", ", off_recognised_welfare_labels($labels))
+            : strtoupper(trim($dimension === "nutrition" ? $nutri_grade : $env_grade));
+
+        $contributions[$dimension] = [
+            "ref"    => $code,
+            "label"  => $product_label,
+            "input"  => clean_value($input, 255),
+            "points" => $points,
+            "url"    => $product_url,
+        ];
+    }
 
     return [
         "name"           => $brand,
@@ -302,6 +382,7 @@ function map_off_product($product, $country = "en:united-kingdom")
             : OFF_CANONICAL . "/product/" . rawurlencode($code),
         "source_licence" => OFF_LICENCE,
         "scores"         => $dimension_scores,
+        "contributions"  => $contributions,
     ];
 }
 
@@ -330,9 +411,9 @@ function collapse_off_products($products, $country = "en:united-kingdom")
         {
             $brands[$key] = $mapped;
 
-            foreach ($mapped["scores"] as $dimension => $value)
+            foreach ($mapped["contributions"] as $dimension => $contribution)
             {
-                $samples[$key][$dimension][] = $value;
+                $samples[$key][$dimension][] = $contribution;
             }
 
             continue;
@@ -340,7 +421,7 @@ function collapse_off_products($products, $country = "en:united-kingdom")
 
         foreach ($mapped as $field => $value)
         {
-            if ($field === "scores")
+            if ($field === "scores" || $field === "contributions")
             {
                 continue;
             }
@@ -352,9 +433,9 @@ function collapse_off_products($products, $country = "en:united-kingdom")
         }
 
         // dimension scores accumulate across every product of the brand
-        foreach ($mapped["scores"] as $dimension => $value)
+        foreach ($mapped["contributions"] as $dimension => $contribution)
         {
-            $samples[$key][$dimension][] = $value;
+            $samples[$key][$dimension][] = $contribution;
         }
     }
 
@@ -363,13 +444,143 @@ function collapse_off_products($products, $country = "en:united-kingdom")
     {
         $averaged = [];
 
-        foreach ($samples[$key] ?? [] as $dimension => $values)
+        foreach ($samples[$key] ?? [] as $dimension => $contributions)
         {
-            $averaged[$dimension] = round(array_sum($values) / count($values), 1);
+            $averaged[$dimension] = off_mean_points($contributions);
         }
 
         $brands[$key]["scores"] = $averaged;
+        // per product, per dimension: what the averages above were taken over
+        $brands[$key]["inputs"] = $samples[$key] ?? [];
+        unset($brands[$key]["contributions"]);
     }
 
     return array_values($brands);
+}
+
+// ---------------------------------------------------------------- writing
+
+/**
+ * Writes derived dimension scores and the per-product inputs behind them,
+ * without ever clobbering a curated one.
+ *
+ * A score a human set in /admin wins over anything derived, and gets no
+ * inputs. Only scores this importer previously wrote are refreshed. For each
+ * dimension the score and its inputs are replaced together in one
+ * transaction, so the stored inputs always average to the stored score.
+ *
+ * $inputs is [dimension => [contribution, ...]] from collapse_off_products().
+ */
+function save_dimension_scores($brand_id, $scores, $source_url, $apply, &$notes, $inputs = [])
+{
+    foreach ($scores as $dimension => $value)
+    {
+        $existing = query(
+            "SELECT source FROM brand_scores WHERE brand_id = ? AND dimension = ?",
+            $brand_id, $dimension
+        );
+
+        if ($existing === false)
+        {
+            $notes[] = "could not read $dimension score";
+            return false;
+        }
+
+        if (!empty($existing) && ($existing[0]["source"] ?? "") !== OFF_SOURCE)
+        {
+            $notes[] = "kept curated $dimension";
+            continue;
+        }
+
+        $rows = $inputs[$dimension] ?? [];
+
+        if (!$apply)
+        {
+            $notes[] = "$dimension=" . $value . ($rows ? " from " . count($rows) . " products" : "");
+            continue;
+        }
+
+        if (query("START TRANSACTION") === false)
+        {
+            $notes[] = "could not start transaction for $dimension";
+            return false;
+        }
+
+        $ok = query(
+            "INSERT INTO brand_scores
+                 (brand_id, dimension, score, note, source, source_url, retrieved_at)
+             VALUES (?, ?, ?, ?, ?, ?, NOW())
+             ON DUPLICATE KEY UPDATE score = VALUES(score), note = VALUES(note),
+                 source = VALUES(source), source_url = VALUES(source_url),
+                 retrieved_at = VALUES(retrieved_at)",
+            $brand_id, $dimension, $value,
+            "Derived from Open Food Facts", OFF_SOURCE, $source_url
+        ) !== false;
+
+        $ok = $ok && query(
+            "DELETE FROM brand_score_inputs WHERE brand_id = ? AND dimension = ?",
+            $brand_id, $dimension
+        ) !== false;
+
+        foreach ($rows as $i => $row)
+        {
+            if (!$ok)
+            {
+                break;
+            }
+
+            $ok = query(
+                "INSERT INTO brand_score_inputs
+                     (brand_id, dimension, seq, ref, label, input, points, url)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                $brand_id, $dimension, $i + 1,
+                $row["ref"], $row["label"], $row["input"], $row["points"], $row["url"]
+            ) !== false;
+        }
+
+        if (!$ok)
+        {
+            query("ROLLBACK");
+            $notes[] = "could not save $dimension score";
+            return false;
+        }
+
+        query("COMMIT");
+    }
+
+    return true;
+}
+
+/**
+ * Inputs behind a brand's derived scores, as [dimension => [row, ...]],
+ * in the order they were recorded.
+ */
+function get_brand_score_inputs($brand_id)
+{
+    $rows = query(
+        "SELECT dimension, ref, label, input, points, url
+           FROM brand_score_inputs
+          WHERE brand_id = ?
+          ORDER BY dimension, seq",
+        $brand_id
+    );
+
+    $out = [];
+    foreach ($rows ?: [] as $row)
+    {
+        $out[$row["dimension"]][] = $row;
+    }
+
+    return $out;
+}
+
+/**
+ * OFF brands_tags slug for a brand name, e.g. "Ben & Jerry's" -> "ben-jerry-s".
+ */
+function off_brand_tag($name)
+{
+    $slug = mb_strtolower(trim((string) $name));
+    $slug = preg_replace('/[^\p{L}\p{N}]+/u', "-", $slug);
+
+    return trim($slug, "-");
 }

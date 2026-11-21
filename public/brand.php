@@ -1,6 +1,7 @@
 <?php
 
 require_once(__DIR__ . "/../includes/config.php");
+require_once(__DIR__ . "/../includes/import.php");
 
 $name = input_string($_GET, "brand");
 
@@ -53,5 +54,6 @@ render("brand.php", [
     "personal" => personal_score($values, $weights),
     "breakdown" => score_breakdown($values, $weights),
     "scores" => $stored,
+    "inputs" => get_brand_score_inputs($brand["brand_id"]),
     "chosen" => has_chosen_priorities(),
 ]);

@@ -15,6 +15,12 @@
  *   * never overwrites a value that is already present, so your edits win
  *   * records source, URL, licence and retrieval time on every row it touches
  *
+ *   php bin/import-openfoodfacts.php --refresh-scores --contact=you@example.com [--apply]
+ *
+ * re-fetches products for brands that already hold Open Food Facts scores and
+ * rewrites only those derived scores and the per-product inputs behind them.
+ * It never touches ratings, notes, owners, brand fields or curated scores.
+ *
  * Open Food Facts is ODbL 1.0. You may reuse it commercially with attribution,
  * and a derived database must be shared alike. The public site credits it via
  * the source fields this writes. For a large import prefer their bulk export
@@ -38,7 +44,7 @@ ini_set("display_errors", "1");
 
 $options = getopt("", [
     "category::", "brand::", "country::", "contact::", "pages::",
-    "limit::", "delay::", "apply", "dump", "help",
+    "limit::", "delay::", "apply", "dump", "help", "refresh-scores",
 ]);
 
 if (isset($options["help"]))
@@ -56,6 +62,10 @@ Usage: php bin/import-openfoodfacts.php --contact=you@example.com [options]
   --delay=SECONDS   Pause between requests (default 6, be polite)
   --dump            Print the first raw product and exit. Use this on the
                     first run to confirm the API's field names.
+  --refresh-scores  Re-fetch products for every brand that already has an
+                    Open Food Facts score and rewrite only those scores and
+                    their per-product inputs. --pages, --limit, --delay and
+                    --country apply per brand. Nothing else is touched.
   --apply           Actually write. Without it, this is a dry run.
 
 TXT);
@@ -80,8 +90,9 @@ $limit    = (int) ($options["limit"] ?? 0);
 $delay    = max(0, (int) ($options["delay"] ?? 6));
 $apply    = isset($options["apply"]);
 $dump     = isset($options["dump"]);
+$refresh  = isset($options["refresh-scores"]);
 
-if ($category === "" && $brand === "")
+if (!$refresh && $category === "" && $brand === "")
 {
     fwrite(STDERR, "Give --category=TAG or --brand=NAME (or --help).\n");
     exit(1);
@@ -91,7 +102,27 @@ $agent = "EthicalBuy-import/0.1 (+" . SITE_URL . "; " . $contact . ")";
 
 // ---------------------------------------------------------------- fetching
 
-function http_get_json($url, $agent)
+/**
+ * GET with retries. Rate limiting (429) and server errors are retried with a
+ * growing pause; anything else fails at once.
+ */
+function http_get_json($url, $agent, $attempts = 3, $backoff = 10)
+{
+    for ($try = 1; ; $try++)
+    {
+        [$data, $error, $retryable] = http_get_json_once($url, $agent);
+
+        if ($error === null || !$retryable || $try >= $attempts)
+        {
+            return [$data, $error];
+        }
+
+        fwrite(STDERR, "  $error, retrying in " . ($backoff * $try) . "s\n");
+        sleep($backoff * $try);
+    }
+}
+
+function http_get_json_once($url, $agent)
 {
     $ch = curl_init($url);
     curl_setopt_array($ch, [
@@ -111,21 +142,21 @@ function http_get_json($url, $agent)
 
     if ($body === false)
     {
-        return [null, "network error: $error"];
+        return [null, "network error: $error", true];
     }
 
     if ($status !== 200)
     {
-        return [null, "HTTP $status"];
+        return [null, "HTTP $status", $status === 429 || $status >= 500];
     }
 
     $decoded = json_decode($body, true);
     if (!is_array($decoded))
     {
-        return [null, "response was not JSON"];
+        return [null, "response was not JSON", false];
     }
 
-    return [$decoded, null];
+    return [$decoded, null, false];
 }
 
 function build_search_url($category, $brand, $page)
@@ -198,60 +229,6 @@ function resolve_category($name, $apply)
 }
 
 /**
- * Writes derived dimension scores, without ever clobbering a curated one.
- *
- * A score a human set in /admin wins over anything derived. Only scores this
- * importer previously wrote are refreshed.
- */
-function save_dimension_scores($brand_id, $scores, $source_url, $apply, &$notes)
-{
-    foreach ($scores as $dimension => $value)
-    {
-        $existing = query(
-            "SELECT source FROM brand_scores WHERE brand_id = ? AND dimension = ?",
-            $brand_id, $dimension
-        );
-
-        if ($existing === false)
-        {
-            $notes[] = "could not read $dimension score";
-            return false;
-        }
-
-        if (!empty($existing) && ($existing[0]["source"] ?? "") !== OFF_SOURCE)
-        {
-            $notes[] = "kept curated $dimension";
-            continue;
-        }
-
-        if (!$apply)
-        {
-            $notes[] = "$dimension=" . $value;
-            continue;
-        }
-
-        $ok = query(
-            "INSERT INTO brand_scores
-                 (brand_id, dimension, score, note, source, source_url, retrieved_at)
-             VALUES (?, ?, ?, ?, ?, ?, NOW())
-             ON DUPLICATE KEY UPDATE score = VALUES(score), note = VALUES(note),
-                 source = VALUES(source), source_url = VALUES(source_url),
-                 retrieved_at = VALUES(retrieved_at)",
-            $brand_id, $dimension, $value,
-            "Derived from Open Food Facts", OFF_SOURCE, $source_url
-        );
-
-        if ($ok === false)
-        {
-            $notes[] = "could not save $dimension score";
-            return false;
-        }
-    }
-
-    return true;
-}
-
-/**
  * Inserts a brand, or fills in only the blanks on an existing one.
  * Returns one of: "created", "filled", "unchanged", "failed".
  */
@@ -309,7 +286,7 @@ function upsert_brand($b, $apply, &$notes)
 
         if ($new_id !== null && !empty($b["scores"]))
         {
-            save_dimension_scores($new_id, $b["scores"], $b["source_url"], $apply, $notes);
+            save_dimension_scores($new_id, $b["scores"], $b["source_url"], $apply, $notes, $b["inputs"] ?? []);
         }
 
         return "created";
@@ -322,7 +299,7 @@ function upsert_brand($b, $apply, &$notes)
     // already filled in, since they carry their own provenance
     if (!empty($b["scores"]))
     {
-        save_dimension_scores((int) $row["id"], $b["scores"], $b["source_url"], $apply, $notes);
+        save_dimension_scores((int) $row["id"], $b["scores"], $b["source_url"], $apply, $notes, $b["inputs"] ?? []);
     }
 
     $sets = [];
@@ -378,43 +355,141 @@ fwrite(STDOUT, ($apply ? "APPLYING" : "DRY RUN (pass --apply to write)") . "\n")
 fwrite(STDOUT, "source:  Open Food Facts (" . OFF_LICENCE . ")\n");
 fwrite(STDOUT, "country: " . ($country ?? "any") . "\n\n");
 
-$products = [];
-
-for ($page = 1; $page <= $pages; $page++)
+/**
+ * Fetches up to $pages pages of products. Exits on a fetch error unless
+ * $soft, in which case it returns null.
+ */
+function fetch_products($category, $brand, $pages, $delay, $agent, $dump, $soft = false)
 {
-    $url = build_search_url($category, $brand, $page);
-    fwrite(STDOUT, "GET $url\n");
+    $products = [];
 
-    [$data, $error] = http_get_json($url, $agent);
-
-    if ($error !== null)
+    for ($page = 1; $page <= $pages; $page++)
     {
-        fwrite(STDERR, "  failed: $error\n");
+        $url = build_search_url($category, $brand, $page);
+        fwrite(STDOUT, "GET $url\n");
+
+        [$data, $error] = http_get_json($url, $agent);
+
+        if ($error !== null)
+        {
+            fwrite(STDERR, "  failed: $error\n");
+            if ($soft)
+            {
+                return null;
+            }
+            exit(1);
+        }
+
+        $batch = $data["products"] ?? [];
+        fwrite(STDOUT, "  " . count($batch) . " products\n");
+
+        if ($dump)
+        {
+            fwrite(STDOUT, "\n--- first raw product ---\n");
+            fwrite(STDOUT, json_encode($batch[0] ?? [], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) . "\n");
+            exit(0);
+        }
+
+        $products = array_merge($products, $batch);
+
+        if (count($batch) < 100)
+        {
+            break;
+        }
+
+        if ($page < $pages && $delay > 0)
+        {
+            sleep($delay);
+        }
+    }
+
+    return $products;
+}
+
+if ($refresh)
+{
+    // only brands that already carry an OFF-derived score
+    $targets = query(
+        "SELECT DISTINCT b.id, b.name
+           FROM brands b
+           JOIN brand_scores s ON s.brand_id = b.id AND s.source = ?
+          ORDER BY b.name",
+        OFF_SOURCE
+    );
+
+    if ($targets === false)
+    {
+        fwrite(STDERR, "Could not read brands with Open Food Facts scores.\n");
         exit(1);
     }
 
-    $batch = $data["products"] ?? [];
-    fwrite(STDOUT, "  " . count($batch) . " products\n");
-
-    if ($dump)
+    if ($limit > 0)
     {
-        fwrite(STDOUT, "\n--- first raw product ---\n");
-        fwrite(STDOUT, json_encode($batch[0] ?? [], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) . "\n");
-        exit(0);
+        $targets = array_slice($targets, 0, $limit);
     }
 
-    $products = array_merge($products, $batch);
+    fwrite(STDOUT, count($targets) . " brands with Open Food Facts scores\n\n");
 
-    if (count($batch) < 100)
+    $stats = ["refreshed" => 0, "not found" => 0, "failed" => 0];
+
+    foreach ($targets as $i => $t)
     {
-        break;
+        if ($i > 0 && $delay > 0)
+        {
+            sleep($delay);
+        }
+
+        $products = fetch_products("", off_brand_tag($t["name"]), $pages, $delay, $agent, false, true);
+        $notes = [];
+
+        if ($products === null)
+        {
+            $stats["failed"]++;
+            fwrite(STDOUT, "  failed    {$t["name"]}\n");
+            continue;
+        }
+
+        // the search may return other brands sharing a product; keep ours
+        $match = null;
+        foreach (collapse_off_products($products, $country) as $b)
+        {
+            if (mb_strtolower($b["name"]) === mb_strtolower($t["name"]))
+            {
+                $match = $b;
+                break;
+            }
+        }
+
+        if ($match === null || empty($match["scores"]))
+        {
+            $stats["not found"]++;
+            fwrite(STDOUT, "  not found {$t["name"]}  (existing scores left as they are)\n");
+            continue;
+        }
+
+        $ok = save_dimension_scores((int) $t["id"], $match["scores"], $match["source_url"],
+            $apply, $notes, $match["inputs"]);
+
+        $stats[$ok ? "refreshed" : "failed"]++;
+        fwrite(STDOUT, sprintf("  %-9s %s%s\n", $ok ? "refreshed" : "failed", $t["name"],
+            $notes ? "  (" . implode("; ", $notes) . ")" : ""));
     }
 
-    if ($page < $pages && $delay > 0)
+    fwrite(STDOUT, "\n");
+    foreach ($stats as $key => $count)
     {
-        sleep($delay);
+        fwrite(STDOUT, sprintf("  %-9s %d\n", $key, $count));
     }
+
+    if (!$apply)
+    {
+        fwrite(STDOUT, "\nNothing was written. Re-run with --apply.\n");
+    }
+
+    exit($stats["failed"] > 0 ? 1 : 0);
 }
+
+$products = fetch_products($category, $brand, $pages, $delay, $agent, $dump);
 
 $brands = collapse_off_products($products, $country);
 
