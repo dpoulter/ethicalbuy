@@ -58,6 +58,13 @@
   calculation.
 </p>
 
+<p>
+  Products are scored the same way, with the same weights. A product has its
+  own nutrition, environment and welfare scores from Open Food Facts; our
+  overall view and ownership are the brand's, applied to each of its
+  products. Each product page shows the calculation.
+</p>
+
 <h5 class="mt-3"><?= e($dims["nutrition"]["label"]) ?></h5>
 <p class="mb-1">Open Food Facts Nutri-Score, mapped to a score:</p>
 <ul class="grade-map">
@@ -91,9 +98,11 @@
 
 <h5>Brands with several products</h5>
 <p>
-  Each imported dimension is the mean across the brand's products, rounded to
-  one decimal place. It reflects the products Open Food Facts lists for the
-  brand, not necessarily the brand's whole range.
+  A brand's nutrition, environment and welfare scores are the mean of its
+  products' scores, rounded to one decimal place. They reflect the products
+  Open Food Facts lists for the brand, not necessarily the brand's whole
+  range. A product is filed under a brand only when Open Food Facts tags it
+  with exactly that brand name.
 </p>
 
 <p class="small text-muted">
@@ -125,6 +134,6 @@
 </p>
 
 <p class="mt-4">
-  <a class="btn btn-primary" href="search.php">Search brands</a>
+  <a class="btn btn-primary" href="search.php">Search brands and products</a>
   <a class="btn btn-outline-secondary" href="index.php">Browse by category</a>
 </p>

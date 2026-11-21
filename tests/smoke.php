@@ -993,5 +993,52 @@ $nutriMean = (float) query("SELECT score FROM brand_scores WHERE brand_id = ? AN
 check("brand working read from products", preg_match('~derivation-products.*?href="product.php\?code=\d+">~s', $html) === 1
     && preg_match('~derivation-sum">[^<]*\) / 31 = ' . preg_quote(number_format($nutriMean, 1)) . '~', $html) === 1);
 
+section("search: brands and products (needs the dev database)");
+query("DELETE FROM brands WHERE name IN ('Bén & Jerry''s Test', 'Oatsome Test')");
+query("INSERT INTO brands (name, rating) VALUES ('Bén & Jerry''s Test', 7), ('Oatsome Test', 5)");
+$bj = (int) query("SELECT id FROM brands WHERE name = 'Bén & Jerry''s Test'")[0]["id"];
+$runP($bj, [["fn" => "products", "brand" => "Bén & Jerry's Test", "apply" => true, "complete" => true, "mapped" => [
+    $pp("880001", "Cookie Dough & Brownie", "Bén & Jerry's Test", ["ben-jerry-s-test"], "e"),
+    $pp("880002", "Crème Brûlée Pot", "Bén & Jerry's Test", ["ben-jerry-s-test"], "d"),
+    $pp("880003", "Chunky Monkey's Banana", "Bén & Jerry's Test", ["ben-jerry-s-test"], "d"),
+]]]);
+[$st, $html] = runPage("search.php", ["q" => "oat"]);
+structureChecks("search groups", $html);
+check("search: two groups in order", $st === 200 && strpos($html, '<h4 class="mt-4">Brands</h4>') !== false
+    && strpos($html, '<h4 class="mt-4">Brands</h4>') < strpos($html, 'id="products">Products</h4>'));
+$brandsPart = substr($html, 0, strpos($html, 'id="products">Products</h4>'));
+$productsPart = substr($html, strpos($html, 'id="products">Products</h4>'));
+check("search: brand matched by name", strpos($brandsPart, 'Oatsome Test') !== false);
+check("search: product matched and linked", strpos($productsPart, 'href="product.php?code=9001"') !== false
+    && strpos($productsPart, 'href="brand.php?brand=Prodco">Prodco</a>') !== false);
+check("search: product group has no brand-only matches", strpos($productsPart, 'Oatsome Test') === false);
+[$st, $html] = runPage("search.php", ["q" => "Ben & Jerrys"]);
+check("search: & and missing apostrophe find the brand", strpos($html, 'Bén &amp; Jerry&#039;s Test') !== false);
+[$st, $html] = runPage("search.php", ["q" => "creme brulee"]);
+check("search: accents ignored", strpos($html, 'Crème Brûlée Pot') !== false);
+[$st, $html] = runPage("search.php", ["q" => "monkeys"]);
+check("search: apostrophe in product name", strpos($html, 'Chunky Monkey&#039;s Banana') !== false);
+[$st, $html] = runPage("search.php", ["q" => "cookie and brownie"]);
+check("search: 'and' matches '&'", strpos($html, 'Cookie Dough &amp; Brownie') !== false);
+[$st, $html] = runPage("search.php", ["q" => "o'"]);
+check("search: short term with apostrophe does not error", $st === 200 && strpos($html, 'Search Results') !== false);
+[$st, $html] = runPage("search.php", ["q" => ""]);
+check("search: empty query lists brands, asks for a product name", $st === 200
+    && strpos($html, 'Enter a name to search products.') !== false && strpos($html, 'Prodco') !== false);
+[$st, $html] = runPage("search.php", ["q" => "the"]);
+check("search: stopword query does not error", $st === 200);
+[$st, $html] = runPage("search.php", ["search_string" => "Prodco"]);
+check("search: old parameter still works", strpos($html, 'href="brand.php?brand=Prodco"') !== false);
+[$st, $html] = runPage("search.php", ["q" => "bulk"]);
+check("search: products paginated", strpos($html, '30 products matched') !== false && strpos($html, 'Page 1 of 2') !== false
+    && substr_count($html, 'href="product.php?code=') === 25);
+[$st, $html] = runPage("search.php", ["q" => "bulk", "page" => "2"]);
+check("search: page 2", substr_count($html, 'href="product.php?code=') === 5);
+[$st, $html] = runPage("search.php", ["q" => "Bulk Item 1"]);
+check("search: exact name first", preg_match('~search-products.*?href="product.php\?code=770001"~s', $html) === 1);
+[$st, $html] = runPage("index.php", []);
+check("nav: menu says Search", strpos($html, '>Search</a>') !== false && strpos($html, 'Product Search') === false);
+query("DELETE FROM brands WHERE name IN ('Bén & Jerry''s Test', 'Oatsome Test', 'Prodco', 'Prodc')");
+
 echo $fails === 0 ? "\nALL PASS\n" : "\n$fails FAILURE(S)\n";
 exit($fails === 0 ? 0 : 1);
