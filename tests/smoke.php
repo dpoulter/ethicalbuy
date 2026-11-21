@@ -1218,5 +1218,34 @@ $o = renderTo("about.php", ["title" => "About"]);
 unset($_SERVER["SCRIPT_NAME"]);
 check("nav marks the current page", strpos($o, 'class="nav-link active" href="/search.php" aria-current="page"') !== false);
 
+section("neutral branding");
+$badgeFor = function ($r) { $rating = $r; ob_start(); require(TEMPLATE_DIR . "/partials/rating_badge.php"); return ob_get_clean(); };
+$low = $badgeFor(2.0);
+$high = $badgeFor(9.0);
+check("2.0 badge is the Avoid band", strpos($low, 'score--danger') !== false && strpos($low, '2/10') !== false && strpos($low, 'Avoid') !== false);
+check("9.0 badge is the Excellent band", strpos($high, 'score--success') !== false && strpos($high, '9/10') !== false && strpos($high, 'Excellent') !== false);
+check("low and high badges differ", rating_class(2.0) !== rating_class(9.0));
+
+// every hex colour in the stylesheet outside the score tokens and the
+// success alert must be neutral or the blue accent: no red, amber or green
+$css = file_get_contents(__DIR__ . "/../public/assets/site.css");
+$chrome = preg_replace('~^.*--(score|eb-error)-?.*$~m', '', $css);
+$chrome = preg_replace('~\.alert-success \{[^}]*\}~', '', $chrome);
+$offenders = [];
+preg_match_all('~#([0-9a-f]{6})\b~i', $chrome, $m);
+foreach (array_unique($m[1]) as $hex) {
+    [$r, $g, $b] = array_map(function ($i) use ($hex) { return hexdec(substr($hex, $i, 2)) / 255; }, [0, 2, 4]);
+    $max = max($r, $g, $b); $min = min($r, $g, $b); $d = $max - $min;
+    $sat = $max == 0 ? 0 : $d / $max;
+    if ($d == 0) { continue; }
+    $hue = $max == $r ? fmod(($g - $b) / $d + 6, 6) * 60 : ($max == $g ? (($b - $r) / $d + 2) * 60 : (($r - $g) / $d + 4) * 60);
+    // allow near-greys and the blue accent family
+    if ($sat > 0.15 && !($hue >= 190 && $hue <= 250)) { $offenders[] = "#$hex"; }
+}
+check("no red, amber or green in the chrome", $offenders === []) || print("   " . implode(", ", $offenders) . "\n");
+check("score-bar uses the score ramp", strpos($css, '.score-bar--danger    > span { background: var(--score-danger-bar); }') !== false);
+$o = renderTo("about.php", ["title" => "About"]);
+check("wordmark is the neutral tick mark", strpos($o, '<circle cx="12" cy="12" r="9.5"') !== false && strpos($o, 'M20 4c-7.5') === false);
+
 echo $fails === 0 ? "\nALL PASS\n" : "\n$fails FAILURE(S)\n";
 exit($fails === 0 ? 0 : 1);
