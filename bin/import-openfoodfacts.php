@@ -15,18 +15,23 @@
  *   * never overwrites a value that is already present, so your edits win
  *   * records source, URL, licence and retrieval time on every row it touches
  *
- *   php bin/import-openfoodfacts.php --products --contact=you@example.com [--apply]
+ *   php bin/import-openfoodfacts.php --products --from-dump=FILE [--apply]
  *
- * fetches every UK product for each brand already in the database, writes the
- * products and their scores, and recomputes each brand's Open Food Facts
- * derived scores as the mean of its products. It never creates brands and
+ * reads the Open Food Facts bulk export (see docs/import-open-food-facts.md)
+ * and, for every brand already in the database, writes its products and their
+ * scores and recomputes the brand's Open Food Facts derived scores as the
+ * mean of its products. It makes no network calls, never creates brands, and
  * never touches ratings, notes, owners, brand fields or curated scores.
- * --refresh-scores is an older name for the same thing.
+ * --refresh-scores is an older name for --products.
+ *
+ * BULK WORK MUST USE THE DUMP. Open Food Facts' search API is for one call
+ * per real user scan; paging it for every brand gets rate limited (HTTP 503)
+ * and may be blocked. The API path below is kept only for single-brand spot
+ * checks (--brand=NAME) and small category imports.
  *
  * Open Food Facts is ODbL 1.0. You may reuse it commercially with attribution,
  * and a derived database must be shared alike. The public site credits it via
- * the source fields this writes. For a large import prefer their bulk export
- * over paging this API: https://world.openfoodfacts.org/data
+ * the source fields this writes. https://world.openfoodfacts.org/data
  */
 
 if (PHP_SAPI !== "cli")
@@ -46,13 +51,20 @@ ini_set("display_errors", "1");
 
 $options = getopt("", [
     "category::", "brand::", "country::", "contact::", "pages::",
-    "limit::", "delay::", "apply", "dump", "help", "refresh-scores", "products",
+    "limit::", "delay::", "apply", "dump", "help", "refresh-scores", "products", "from-dump:",
 ]);
 
 if (isset($options["help"]))
 {
     fwrite(STDOUT, <<<TXT
-Usage: php bin/import-openfoodfacts.php --contact=you@example.com [options]
+Usage:
+  php bin/import-openfoodfacts.php --products --from-dump=FILE [--apply]
+  php bin/import-openfoodfacts.php --brand=NAME --contact=you@example.com [--apply]
+  php bin/import-openfoodfacts.php --category=TAG --contact=you@example.com [--apply]
+
+Bulk work (every brand's products) must go through the Open Food Facts bulk
+export, never the API: see docs/import-open-food-facts.md.
+
 
   --contact=EMAIL   Required. Open Food Facts asks that clients identify
                     themselves; anonymous scrapers get blocked.
@@ -64,19 +76,39 @@ Usage: php bin/import-openfoodfacts.php --contact=you@example.com [options]
   --delay=SECONDS   Pause between requests (default 6, be polite)
   --dump            Print the first raw product and exit. Use this on the
                     first run to confirm the API's field names.
-  --products        For every brand already here, fetch all its UK products
-                    and write them with their scores; brand scores are
-                    recomputed as the mean of their products. Creates no
-                    brands. --pages (default 20 here), --limit, --delay and
-                    --country apply per brand. --refresh-scores is an alias.
+  --products        For every brand already here, write its products from
+                    the dump and recompute its scores as the mean of its
+                    products. Needs --from-dump. Creates no brands.
+                    --refresh-scores is an alias.
+  --from-dump=FILE  The export: the full .csv.gz, or a filtered subset with
+                    the same header (plain or gzipped). Read once, streamed,
+                    no network. --country and --limit apply.
   --apply           Actually write. Without it, this is a dry run.
 
 TXT);
     exit(0);
 }
 
+$from_dump = trim((string) ($options["from-dump"] ?? ""));
+$refresh   = isset($options["refresh-scores"]) || isset($options["products"]);
+
+if ($refresh && $from_dump === "")
+{
+    fwrite(STDERR, "--products reads the Open Food Facts bulk export: add --from-dump=FILE.\n");
+    fwrite(STDERR, "Paging the API for every brand is rate limited and may be blocked.\n");
+    fwrite(STDERR, "See docs/import-open-food-facts.md for where to download it.\n");
+    exit(1);
+}
+
+if ($from_dump !== "" && !$refresh)
+{
+    fwrite(STDERR, "--from-dump is for --products runs.\n");
+    exit(1);
+}
+
+// the dump needs no contact address: it makes no requests
 $contact = trim((string) ($options["contact"] ?? getenv("IMPORT_CONTACT") ?: ""));
-if ($contact === "")
+if ($contact === "" && $from_dump === "")
 {
     fwrite(STDERR, "Refusing to run without --contact=EMAIL.\n");
     fwrite(STDERR, "Open Food Facts asks clients to identify themselves, and\n");
@@ -88,9 +120,7 @@ $category = trim((string) ($options["category"] ?? ""));
 $brand    = trim((string) ($options["brand"] ?? ""));
 $country  = trim((string) ($options["country"] ?? "en:united-kingdom"));
 $country  = ($country === "any" || $country === "") ? null : $country;
-$refresh  = isset($options["refresh-scores"]) || isset($options["products"]);
-// enough pages to cover the largest UK brands when backfilling products
-$pages    = max(1, (int) ($options["pages"] ?? ($refresh ? 20 : 1)));
+$pages    = max(1, (int) ($options["pages"] ?? 1));
 $limit    = (int) ($options["limit"] ?? 0);
 $delay    = max(0, (int) ($options["delay"] ?? 6));
 $apply    = isset($options["apply"]);
@@ -112,6 +142,13 @@ $agent = "EthicalBuy-import/0.1 (+" . SITE_URL . "; " . $contact . ")";
  */
 function http_get_json($url, $agent, $attempts = 3, $backoff = 10)
 {
+    // a dump run must never reach the network; fail loudly if it tries
+    if (!empty($GLOBALS["NO_NETWORK"]))
+    {
+        fwrite(STDERR, "BUG: network call attempted in --from-dump mode: $url\n");
+        exit(3);
+    }
+
     for ($try = 1; ; $try++)
     {
         [$data, $error, $retryable] = http_get_json_once($url, $agent);
@@ -414,71 +451,129 @@ function fetch_products($category, $brand, $pages, $delay, $agent, $dump, $soft 
 
 if ($refresh)
 {
+    $NO_NETWORK = true;
+
+    if (!is_file($from_dump) || !is_readable($from_dump))
+    {
+        fwrite(STDERR, "Cannot read $from_dump\n");
+        exit(1);
+    }
+
     // every brand we already hold; this mode never creates one
     $targets = query("SELECT id, name FROM brands ORDER BY name");
-
     if ($targets === false)
     {
         fwrite(STDERR, "Could not read brands.\n");
         exit(1);
     }
-
     if ($limit > 0)
     {
         $targets = array_slice($targets, 0, $limit);
     }
 
+    $dump_date = off_dump_date($from_dump);
+    fwrite(STDOUT, "dump:    $from_dump (built $dump_date)\n");
     fwrite(STDOUT, count($targets) . " brands\n\n");
 
-    $stats = ["updated" => 0, "no products" => 0, "failed" => 0];
-
-    foreach ($targets as $i => $t)
+    $started = microtime(true);
+    try
     {
-        if ($i > 0 && $delay > 0)
+        $by_brand = off_dump_products_by_brand($from_dump, $targets, $country, $read);
+    }
+    catch (RuntimeException $e)
+    {
+        fwrite(STDERR, $e->getMessage() . "\n");
+        exit(1);
+    }
+    fwrite(STDOUT, sprintf("read %d rows in %.0fs: %d kept, %d malformed skipped, %d shared by more than one of our brands\n\n",
+        $read["lines"], microtime(true) - $started, $read["kept"], $read["malformed"], $read["shared"]));
+
+    $stats = ["updated" => 0, "unchanged" => 0, "no products" => 0, "failed" => 0];
+    $zero = [];
+    $changes = [];
+    $total_products = 0;
+
+    foreach ($targets as $t)
+    {
+        $id = (int) $t["id"];
+        $mapped = array_values($by_brand[$id] ?? []);
+
+        if (!$mapped)
         {
-            sleep($delay);
-        }
-
-        $complete = false;
-        $raw = fetch_products("", off_brand_tag($t["name"]), $pages, $delay, $agent, false, true, $complete);
-        $notes = [];
-
-        if ($raw === null)
-        {
-            // a failed fetch must not be mistaken for "the brand has no products"
-            $stats["failed"]++;
-            fwrite(STDOUT, "  failed      {$t["name"]}  (nothing changed)\n");
-            continue;
-        }
-
-        $mapped = array_values(array_filter(array_map(function ($p) use ($country) {
-            return map_off_product($p, $country);
-        }, $raw)));
-
-        if (!off_products_for_brand($t["name"], $mapped))
-        {
+            // keep whatever it has: the tag may simply be wrong
             $stats["no products"]++;
-            fwrite(STDOUT, "  no products {$t["name"]}  (nothing changed)\n");
+            $zero[] = [$t["name"], off_brand_tag($t["name"])];
             continue;
         }
 
-        if (!$complete)
+        $plan = off_plan_brand($id, $mapped);
+        $total_products += $plan["products"];
+
+        $score_bits = [];
+        $changed = $plan["added"] || $plan["removed"];
+        foreach ($plan["scores"] as $dimension => $sc)
         {
-            $notes[] = "stopped at $pages pages";
+            if ($sc["curated"])
+            {
+                $score_bits[] = "$dimension {$sc["new"]} (kept curated {$sc["old"]})";
+                continue;
+            }
+            $delta = $sc["old"] === null ? null : round($sc["new"] - $sc["old"], 1);
+            $score_bits[] = "$dimension {$sc["new"]}" . ($sc["old"] === null ? " (new)" : ($delta == 0 ? "" : sprintf(" (%+.1f from %s)", $delta, $sc["old"])));
+            if ($sc["old"] === null || $delta != 0)
+            {
+                $changed = true;
+                $changes[] = [$t["name"], $dimension, $sc["old"], $sc["new"], $sc["old"] === null ? null : $delta];
+            }
         }
 
-        $ok = save_brand_products((int) $t["id"], $t["name"], $mapped, $apply, $notes, $complete);
+        $grade_bits = [];
+        foreach ($plan["grades"] as $dimension => $counts)
+        {
+            ksort($counts);
+            $grade_bits[] = $dimension . " " . implode(" ", array_map(function ($g, $n) { return "$g:$n"; }, array_keys($counts), $counts));
+        }
 
-        $stats[$ok ? "updated" : "failed"]++;
-        fwrite(STDOUT, sprintf("  %-11s %s%s\n", $ok ? "updated" : "failed", $t["name"],
-            $notes ? "  (" . implode("; ", $notes) . ")" : ""));
+        fwrite(STDOUT, sprintf("  %-28s %4d products (+%d -%d)\n", $t["name"], $plan["products"], $plan["added"], $plan["removed"]));
+        if ($grade_bits) { fwrite(STDOUT, "      grades: " . implode("; ", $grade_bits) . "\n"); }
+        if ($score_bits) { fwrite(STDOUT, "      scores: " . implode("; ", $score_bits) . "\n"); }
+
+        if (!$apply)
+        {
+            $stats[$changed ? "updated" : "unchanged"]++;
+            continue;
+        }
+
+        $notes = [];
+        $ok = save_brand_products($id, $t["name"], $mapped, true, $notes, true,
+            ["retrieved_at" => $dump_date, "move" => true]);
+        $stats[$ok ? ($changed ? "updated" : "unchanged") : "failed"]++;
+        if (!$ok) { fwrite(STDOUT, "      FAILED: " . implode("; ", $notes) . "\n"); }
     }
 
-    fwrite(STDOUT, "\n");
+    fwrite(STDOUT, "\nTotals\n");
+    fwrite(STDOUT, sprintf("  %-12s %d\n", "products", $total_products));
     foreach ($stats as $key => $count)
     {
-        fwrite(STDOUT, sprintf("  %-11s %d\n", $key, $count));
+        fwrite(STDOUT, sprintf("  %-12s %d\n", $key, $count));
     }
+
+    fwrite(STDOUT, "\nBrands with no products in the dump (" . count($zero) . "), left as they are:\n");
+    foreach ($zero as [$name, $tag])
+    {
+        fwrite(STDOUT, "  $name  (looked for tag \"$tag\")\n");
+    }
+
+    usort($changes, function ($a, $b) { return abs($b[4] ?? 0) <=> abs($a[4] ?? 0); });
+    $moved = array_filter($changes, function ($c) { return $c[4] !== null; });
+    fwrite(STDOUT, "\nLargest score changes:\n");
+    foreach (array_slice($moved, 0, 20) as [$name, $dimension, $old, $new, $delta])
+    {
+        fwrite(STDOUT, sprintf("  %-28s %-12s %4s -> %4s  (%+.1f)\n", $name, $dimension, $old, $new, $delta));
+    }
+    if (!$moved) { fwrite(STDOUT, "  none\n"); }
+    $added = count($changes) - count($moved);
+    if ($added) { fwrite(STDOUT, "  plus $added newly scored brand dimensions\n"); }
 
     if (!$apply)
     {
