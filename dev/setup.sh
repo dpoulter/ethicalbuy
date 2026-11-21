@@ -91,6 +91,8 @@ GRANT SELECT                         ON \`$DB_NAME\`.owners     TO '$DB_USER'@'l
 GRANT SELECT, INSERT, UPDATE, DELETE ON \`$DB_NAME\`.brands       TO '$DB_USER'@'localhost';
 GRANT SELECT, INSERT, UPDATE, DELETE ON \`$DB_NAME\`.brand_scores TO '$DB_USER'@'localhost';
 GRANT SELECT                         ON \`$DB_NAME\`.brand_score_inputs TO '$DB_USER'@'localhost';
+GRANT SELECT                         ON \`$DB_NAME\`.products       TO '$DB_USER'@'localhost';
+GRANT SELECT                         ON \`$DB_NAME\`.product_scores TO '$DB_USER'@'localhost';
 
 -- confirming a Companies House match happens in /admin
 GRANT SELECT, UPDATE ON \`$DB_NAME\`.owners                   TO '$DB_USER'@'localhost';
@@ -101,6 +103,8 @@ GRANT SELECT, DELETE ON \`$DB_NAME\`.owner_company_candidates TO '$DB_USER'@'loc
 GRANT SELECT, INSERT, UPDATE         ON \`$DB_NAME\`.brands       TO '$IMPORT_USER'@'localhost';
 GRANT SELECT, INSERT, UPDATE         ON \`$DB_NAME\`.brand_scores TO '$IMPORT_USER'@'localhost';
 GRANT SELECT, INSERT, DELETE         ON \`$DB_NAME\`.brand_score_inputs TO '$IMPORT_USER'@'localhost';
+GRANT SELECT, INSERT, UPDATE, DELETE ON \`$DB_NAME\`.products       TO '$IMPORT_USER'@'localhost';
+GRANT SELECT, INSERT, UPDATE, DELETE ON \`$DB_NAME\`.product_scores TO '$IMPORT_USER'@'localhost';
 GRANT SELECT, INSERT                 ON \`$DB_NAME\`.categories TO '$IMPORT_USER'@'localhost';
 GRANT SELECT, INSERT, UPDATE         ON \`$DB_NAME\`.owners     TO '$IMPORT_USER'@'localhost';
 GRANT SELECT, INSERT, UPDATE, DELETE ON \`$DB_NAME\`.owner_company_candidates
