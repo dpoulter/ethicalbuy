@@ -1,3 +1,4 @@
+<div class="prose">
 <!--
   The prose on this page is a starting point. Edit it to describe your own
   sourcing and methodology before going public with it.
@@ -157,3 +158,4 @@
   <a class="btn btn-primary" href="search.php">Search brands and products</a>
   <a class="btn btn-outline-secondary" href="index.php">Browse by category</a>
 </p>
+</div>

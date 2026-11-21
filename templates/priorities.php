@@ -18,11 +18,11 @@
   </div>
 <?php endif ?>
 
-<form action="/priorities.php" method="post" class="col-lg-9">
+<form action="/priorities.php" method="post" class="col-lg-9 priorities-form">
   <?= csrf_field() ?>
 
   <?php foreach (score_dimensions() as $key => $meta): ?>
-    <div class="card mb-3">
+    <div class="card mb-3 priority-card">
       <div class="card-body">
         <div class="d-flex justify-content-between align-items-start flex-wrap gap-2">
           <div>
@@ -30,7 +30,7 @@
             <p class="text-muted mb-2"><?= e($meta["blurb"]) ?></p>
             <p class="small text-muted mb-0"><?= e($meta["sourced"]) ?></p>
           </div>
-          <span class="badge text-bg-light border align-self-center"
+          <span class="weight-value align-self-center"
                 id="label_<?= e($key) ?>">
             <?= e(weight_label($weights[$key])) ?>
           </span>
@@ -44,7 +44,7 @@
                step="1" value="<?= (int) $weights[$key] ?>"
                data-label="label_<?= e($key) ?>">
 
-        <div class="d-flex justify-content-between small text-muted">
+        <div class="d-flex justify-content-between small text-muted weight-scale">
           <span>Ignore</span>
           <span>Normal</span>
           <span>Critical</span>

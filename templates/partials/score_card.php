@@ -60,9 +60,10 @@
               </td>
               <td>
                 <?php if ($row["score"] === null): ?>
-                  <span class="badge text-bg-light border">Not assessed</span>
+                  <span class="score score--none score--sm"><span class="score__value score__value--text">Not assessed</span></span>
                 <?php else: ?>
                   <?php $rating = $row["score"]; require(TEMPLATE_DIR . "/partials/rating_badge.php"); ?>
+                  <span class="score-bar score-bar--<?= e(rating_class($row["score"])) ?>" aria-hidden="true"><span style="width: <?= (int) round($row["score"] * 10) ?>%"></span></span>
                 <?php endif ?>
               </td>
               <td class="small"><?= e($row["sourced"]) ?></td>

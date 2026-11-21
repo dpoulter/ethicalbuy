@@ -5,10 +5,10 @@
  */
 ?>
 <?php if ($dim_score === null): ?>
-  <span class="badge text-bg-light border">Not assessed</span>
+  <span class="score score--none score--sm"><span class="score__value score__value--text">Not assessed</span></span>
 <?php else: ?>
   <?php $rating = $dim_score["score"]; require(TEMPLATE_DIR . "/partials/rating_badge.php"); ?>
   <?php if ($dim_score["input"] !== null && $dim_score["input"] !== ""): ?>
-    <span class="small text-muted"><?= e($dim_score["input"]) ?></span>
+    <span class="score-input"><?= e($dim_score["input"]) ?></span>
   <?php endif ?>
 <?php endif ?>

@@ -1,7 +1,8 @@
+<section class="hero">
 <h3>Search</h3>
 <p class="text-muted">Search brands and products by name. The filters below apply to brands.</p>
 
-<form action="search.php" method="get" class="mb-4">
+<form action="search.php" method="get" class="search-form">
   <input type="hidden" name="submitted" value="1">
 
   <div class="row g-2 align-items-end">
@@ -73,12 +74,13 @@
     <a href="search.php" class="btn btn-outline-secondary">Reset</a>
   </div>
 </form>
+</section>
 
 <?php if ($submitted): ?>
 
   <?php require(TEMPLATE_DIR . "/partials/rating_legend.php"); ?>
 
-  <h4 class="mt-4">Brands</h4>
+  <h4 class="mt-4 group-heading">Brands</h4>
   <p class="text-muted">
     <?= count($results) ?> brand<?= count($results) === 1 ? "" : "s" ?>
     <?php if ($filters["term"] !== ""): ?>
@@ -99,7 +101,7 @@
     </div>
   <?php else: ?>
     <div class="table-responsive">
-      <table class="table align-middle" id="tbl">
+      <table class="table align-middle table-cards" id="tbl">
         <thead>
           <tr>
             <th><?= $chosen ? "Your rating" : "Balanced" ?></th>
@@ -147,7 +149,7 @@
     $product_page = $product_page ?? 1;
     $product_pages = $product_pages ?? 1;
   ?>
-  <h4 class="mt-4" id="products">Products</h4>
+  <h4 class="mt-4 group-heading" id="products">Products</h4>
   <?php if ($filters["term"] === ""): ?>
     <p class="text-muted">Enter a name to search products.</p>
   <?php elseif (!$products): ?>
@@ -160,7 +162,7 @@
       <?php endif ?>
     </p>
     <div class="table-responsive">
-      <table class="table align-middle search-products">
+      <table class="table align-middle table-cards search-products">
         <thead>
           <tr>
             <th><?= $chosen ? "Your rating" : "Balanced" ?></th>

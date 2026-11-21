@@ -6,17 +6,17 @@
 $p = $personal;
 $p_class = $p["score"] === null ? "" : rating_class($p["score"]);
 ?>
-<span class="badge <?= $p_class === "" ? "text-bg-light border" : "text-bg-" . $p_class ?>">
+<span class="score score--<?= $p_class === "" ? "none" : e($p_class) ?>">
   <?php if ($p["score"] === null): ?>
-    No data for your priorities
+    <span class="score__value score__value--text">No data for your priorities</span>
   <?php else: ?>
-    <?= e(rating_score($p["score"])) ?>
-    <?php if ($p_class !== ""): ?>&middot; <?= e(rating_label($p["score"])) ?><?php endif ?>
+    <span class="score__value"><?= e(rating_score($p["score"])) ?></span>
+    <?php if ($p_class !== ""): ?><span class="score__label"><?= e(rating_label($p["score"])) ?></span><?php endif ?>
   <?php endif ?>
 </span>
 
 <?php if (empty($personal_compact) && $p["score"] !== null && $p["missing"]): ?>
-  <span class="small <?= $p["confident"] ? "text-muted" : "text-danger" ?>">
+  <span class="small score-caption <?= $p["confident"] ? "text-muted" : "score-caption--caution" ?>">
     <?php if (!$p["confident"]): ?>
       &#9888; based on only <?= (int) round($p["coverage"] * 100) ?>% of what you asked for
     <?php else: ?>
