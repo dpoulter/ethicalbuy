@@ -26,8 +26,8 @@
   <div class="container">
     <a class="navbar-brand site-wordmark" href="/index.php">
       <svg class="site-wordmark__mark" viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" focusable="false">
-        <path d="M20 4c-7.5 0-13 3.6-13 10.2 0 1.6.4 3 1.1 4.1C9.6 13.9 12.8 10.8 17 9c-3.6 2.4-6.2 5.6-7.6 10.4 1 .4 2 .6 3.2.6C18.4 20 20 13.4 20 4z" fill="currentColor"/>
-        <path d="M4.5 20.5c1.4-2.6 3-4.6 4.7-6.3" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" fill="none"/>
+        <circle cx="12" cy="12" r="9.5" fill="none" stroke="currentColor" stroke-width="1.8"/>
+        <path d="M7.8 12.3l2.8 2.8 5.6-5.9" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/>
       </svg>
       <span>Ethical Buy</span>
     </a>
