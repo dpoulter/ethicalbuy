@@ -1247,5 +1247,110 @@ check("score-bar uses the score ramp", strpos($css, '.score-bar--danger    > spa
 $o = renderTo("about.php", ["title" => "About"]);
 check("wordmark is the neutral tick mark", strpos($o, '<circle cx="12" cy="12" r="9.5"') !== false && strpos($o, 'M20 4c-7.5') === false);
 
+section("open food facts dump: grades and reading");
+check("eco a-plus -> 10", off_grade_to_score("a-plus", off_eco_grade_map()) === 10.0);
+check("eco f -> 1", off_grade_to_score("f", off_eco_grade_map()) === 1.0);
+foreach (["unknown", "not-applicable", "", null] as $g) {
+    check("eco " . var_export($g, true) . " -> unscored", off_grade_to_score($g, off_eco_grade_map()) === null);
+}
+check("nutri-score has no a-plus or f", off_grade_to_score("a-plus") === null && off_grade_to_score("f") === null);
+check("grade label A+", off_grade_label("a-plus") === "A+" && off_grade_label("c") === "C");
+check("environment method lists A+ and F", strpos(off_dimension_method("environment"), "A+ 10") !== false
+    && strpos(off_dimension_method("environment"), "F 1") !== false);
+$aboutHtml = renderTo("about.php", ["title" => "About"]);
+check("about: eco mapping generated with A+ and F", strpos($aboutHtml, "A+ = 10, A = 10, B = 8, C = 6, D = 4, E = 2, F = 1") !== false);
+foreach (["xx:dump-alpha", "en:dump-alpha", "fr:dump-alpha"] as $tag) {
+    check("prefix stripped: $tag", in_array(brand_match_key("Dump Alpha"), off_product_brand_keys(["brands_tags" => [$tag]]), true));
+}
+
+$fixture = __DIR__ . "/fixtures/off-dump-sample.tsv";
+$rows = iterator_to_array(off_dump_rows($fixture, null, $readStats), false);
+check("dump: header read by name, malformed lines skipped", count($rows) === 10 && $readStats["malformed"] === 2);
+check("dump: tags split into arrays", $rows[0]["brands_tags"] === ["xx:dump-alpha"] && $rows[0]["countries_tags"] === ["en:france", "en:united-kingdom"]);
+$gz = tempnam(sys_get_temp_dir(), "offdump") . ".tsv.gz";
+file_put_contents($gz, gzencode(file_get_contents($fixture)));
+check("dump: gzip and plain read identically", iterator_to_array(off_dump_rows($gz), false) == $rows);
+$fakeBrands = [["id" => 1, "name" => "Dump Alpha"], ["id" => 2, "name" => "Dump Beta"]];
+$uk = off_dump_products_by_brand($fixture, $fakeBrands, "en:united-kingdom", $st);
+check("dump: UK only", array_keys($uk[1]) === ["D001", "D002", "D003", "D005"]);
+check("dump: shared product filed once, under its first tag we hold", isset($uk[1]["D005"]) && !isset($uk[2]["D005"]) && $st["shared"] === 1);
+check("dump: near miss and other brands ignored", !isset($uk[1]["D009"]) && count($uk) === 2);
+$any = off_dump_products_by_brand($fixture, $fakeBrands, null);
+check("dump: --country=any keeps the French-only product", isset($any[1]["D004"]));
+check("dump: welfare from labels", $uk[1]["D001"]["scores"]["welfare"] === 9.5 && !isset($uk[1]["D002"]["scores"]["welfare"]));
+check("dump: a-plus and f scored, unknown and blank not", $uk[1]["D001"]["scores"]["environment"] === 10.0
+    && $uk[1]["D002"]["scores"]["environment"] === 1.0 && !isset($uk[1]["D003"]["scores"]["environment"])
+    && !isset($uk[1]["D005"]["scores"]["environment"]) && !isset($uk[1]["D003"]["scores"]["nutrition"]));
+check("dump: input shown as A+", $uk[1]["D001"]["contributions"]["environment"]["input"] === "A+");
+
+section("open food facts dump: importer run (needs the dev database)");
+function runDumpImport($args) {
+    $env = array_merge(getenv(), ["DB_USER" => getenv("IMPORT_DB_USER") ?: "ethicalbuy_import",
+        "DB_PASSWORD" => getenv("IMPORT_DB_PASSWORD") ?: "ethicalbuy_import_dev",
+        // would fail loudly if anything tried the network
+        "OFF_BASE" => "http://127.0.0.1:9"]);
+    $proc = proc_open(array_merge([PHP_BINARY, __DIR__ . "/../bin/import-openfoodfacts.php"], $args),
+        [1 => ["pipe", "w"], 2 => ["pipe", "w"]], $pipes, null, $env);
+    $out = stream_get_contents($pipes[1]) . stream_get_contents($pipes[2]);
+    return [proc_close($proc), $out];
+}
+query("DELETE FROM brands WHERE name LIKE 'Dump %'");
+query("INSERT INTO brands (name, rating, notes) VALUES ('Dump Alpha', 6, 'keep me'), ('Dump Beta', NULL, NULL),
+       ('Dump Gamma', 7, NULL), ('Dump Delta', 5, NULL)");
+$did = function ($n) { return (int) query("SELECT id FROM brands WHERE name = ?", $n)[0]["id"]; };
+$child([["fn" => "products", "brand" => "Dump Gamma", "apply" => true, "complete" => true,
+         "mapped" => [$pp("G001", "Gamma Old Product", "Dump Gamma", ["dump-gamma"], "b")]]], $did("Dump Gamma"));
+$child([["fn" => "products", "brand" => "Dump Delta", "apply" => true, "complete" => true,
+         "mapped" => [$pp("D998", "Delta Discontinued", "Dump Delta", ["dump-delta"], "a"),
+                      $pp("D007", "Delta Kept Jam", "Dump Delta", ["dump-delta"], "d")]]], $did("Dump Delta"));
+$codesOf = function ($name) { return array_column(query("SELECT p.code FROM products p JOIN brands b ON b.id = p.brand_id WHERE b.name = ? ORDER BY p.code", $name) ?: [], "code"); };
+
+[$rc, $out] = runDumpImport(["--products"]);
+check("--products without --from-dump refuses", $rc === 1 && strpos($out, "add --from-dump=FILE") !== false);
+
+[$rc, $dry] = runDumpImport(["--products", "--from-dump=$fixture"]);
+check("dry run: exit 0, no contact needed, no network", $rc === 0 && strpos($dry, "GET ") === false && strpos($dry, "network call") === false);
+check("dry run: writes nothing", $codesOf("Dump Alpha") === []);
+check("dry run: per-brand products and grades", preg_match('~Dump Alpha\s+4 products \(\+4 -0\)~', $dry) === 1
+    && strpos($dry, "environment A+:1 F:1") !== false);
+check("dry run: resulting scores", strpos($dry, "nutrition 8 (new)") !== false && strpos($dry, "environment 5.5 (new)") !== false);
+check("dry run: removal counted for a processed brand", preg_match('~Dump Delta\s+1 products \(\+0 -1\)~', $dry) === 1);
+check("dry run: zero-product brand reported with its tag", strpos($dry, 'Dump Gamma  (looked for tag "dump-gamma")') !== false);
+check("dry run: shared and malformed counted", strpos($dry, "2 malformed skipped, 1 shared") !== false);
+[$rc, $dryGz] = runDumpImport(["--products", "--from-dump=$gz"]);
+$strip = function ($o) { return preg_replace('~^dump: .*$~m', '', preg_replace('~in \d+s~', '', $o)); };
+check("dry run: gzip and plain give the same report", $strip($dry) === $strip($dryGz));
+
+[$rc, $out] = runDumpImport(["--products", "--from-dump=$fixture", "--apply"]);
+check("apply: exit 0, no network", $rc === 0 && strpos($out, "GET ") === false);
+check("apply: products written", $codesOf("Dump Alpha") === ["D001", "D002", "D003", "D005"] && $codesOf("Dump Beta") === ["D006", "D010"]);
+$bsOf = function ($name) {
+    $r = query("SELECT s.dimension, s.score FROM brand_scores s JOIN brands b ON b.id = s.brand_id WHERE b.name = ?", $name);
+    return array_map("floatval", array_column($r ?: [], "score", "dimension"));
+};
+$alpha = $bsOf("Dump Alpha");
+check("apply: derived brand scores", $alpha == ["nutrition" => 8.0, "environment" => 5.5, "welfare" => 9.5]);
+$meanRows = query("SELECT ps.dimension, ROUND(AVG(ps.score), 1) m FROM product_scores ps JOIN products p ON p.id = ps.product_id
+                   JOIN brands b ON b.id = p.brand_id WHERE b.name = 'Dump Alpha' GROUP BY ps.dimension");
+check("apply: brand score equals mean of product scores", array_map("floatval", array_column($meanRows, "m", "dimension")) == $alpha);
+check("apply: retrieved_at is the dump's date", query("SELECT retrieved_at FROM products WHERE code = 'D001'")[0]["retrieved_at"] === off_dump_date($fixture));
+check("apply: source_url is the product page", query("SELECT source_url FROM products WHERE code = 'D001'")[0]["source_url"] === "https://world.openfoodfacts.org/product/D001");
+check("apply: brand with no dump rows keeps its products", $codesOf("Dump Gamma") === ["G001"]);
+check("apply: product missing from the dump deleted", $codesOf("Dump Delta") === ["D007"]);
+check("apply: rating and notes untouched", query("SELECT rating, notes FROM brands WHERE name = 'Dump Alpha'")[0] == ["rating" => "6.0", "notes" => "keep me"]);
+$before = query("SELECT p.code, p.brand_id, p.retrieved_at, ps.dimension, ps.score, ps.input FROM products p
+                  LEFT JOIN product_scores ps ON ps.product_id = p.id WHERE p.code LIKE 'D0%' ORDER BY p.code, ps.dimension");
+[$rc, $again] = runDumpImport(["--products", "--from-dump=$fixture", "--apply"]);
+$after = query("SELECT p.code, p.brand_id, p.retrieved_at, ps.dimension, ps.score, ps.input FROM products p
+                 LEFT JOIN product_scores ps ON ps.product_id = p.id WHERE p.code LIKE 'D0%' ORDER BY p.code, ps.dimension");
+check("second run: no data changes", $before === $after && $bsOf("Dump Alpha") == $alpha);
+[$rc, $dry2] = runDumpImport(["--products", "--from-dump=$fixture"]);
+check("second run: reports no changes", preg_match('~updated\s+0~', $dry2) === 1 && strpos($dry2, "Largest score changes:\n  none") !== false
+    && preg_match('~Dump Alpha\s+4 products \(\+0 -0\)~', $dry2) === 1);
+[$st, $html] = runPage("product.php", ["code" => "D001"]);
+check("product page shows the A+ grade", preg_match('~Grade: A\+\s*= 10 points~', $html) === 1);
+query("DELETE FROM brands WHERE name LIKE 'Dump %'");
+@unlink($gz);
+
 echo $fails === 0 ? "\nALL PASS\n" : "\n$fails FAILURE(S)\n";
 exit($fails === 0 ? 0 : 1);

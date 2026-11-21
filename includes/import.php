@@ -108,19 +108,49 @@ function clean_value($value, $max = 255)
 }
 
 /**
- * Open Food Facts publishes A-E letter grades for environmental impact
- * (Eco-Score / Green-Score) and nutrition (Nutri-Score). Map them onto the
- * site's 1-10 scale. Anything else, including "unknown" and "not-applicable",
- * returns null so it is recorded as not assessed rather than as a bad score.
+ * Open Food Facts publishes letter grades for nutrition (Nutri-Score, A-E)
+ * and environmental impact (Eco-Score / Green-Score, which also uses A+ and
+ * F). Map them onto the site's 1-10 scale. Anything else, including
+ * "unknown", "not-applicable" and an empty value, returns null so it is
+ * recorded as not assessed rather than as a bad score.
  */
 function off_grade_map()
 {
     return ["a" => 10.0, "b" => 8.0, "c" => 6.0, "d" => 4.0, "e" => 2.0];
 }
 
-function off_grade_to_score($grade)
+/**
+ * The Eco-Score scale: A+ counts as A (10) and F as 1, the lowest score the
+ * schema allows.
+ */
+function off_eco_grade_map()
 {
-    $grades = off_grade_map();
+    return ["a-plus" => 10.0] + off_grade_map() + ["f" => 1.0];
+}
+
+/**
+ * Display form of a grade: "a-plus" -> "A+", "b" -> "B".
+ */
+function off_grade_label($grade)
+{
+    $grade = strtolower(trim((string) $grade));
+
+    return $grade === "a-plus" ? "A+" : strtoupper($grade);
+}
+
+/**
+ * "A 10, B 8, ..." for a grade map, for method lines and the About page.
+ */
+function off_grade_map_text($map, $joiner = " ")
+{
+    return implode(", ", array_map(function ($g, $s) use ($joiner) {
+        return off_grade_label($g) . $joiner . str_replace("/10", "", rating_score($s));
+    }, array_keys($map), $map));
+}
+
+function off_grade_to_score($grade, $map = null)
+{
+    $grades = $map ?? off_grade_map();
 
     if (!is_string($grade))
     {
@@ -225,10 +255,8 @@ function off_mean_points($contributions)
  */
 function off_dimension_method($dimension, $per_product = false)
 {
-    $grades = implode(", ", array_map(function ($g, $s) {
-        return strtoupper($g) . " " . rating_score($s);
-    }, array_keys(off_grade_map()), off_grade_map()));
-    $grades = str_replace("/10", "", $grades);
+    $grades = off_grade_map_text(off_grade_map());
+    $eco = off_grade_map_text(off_eco_grade_map());
 
     switch ($dimension)
     {
@@ -238,8 +266,8 @@ function off_dimension_method($dimension, $per_product = false)
                 : "Nutri-Score letter per product: $grades. Brand score is the average.";
         case "environment":
             return $per_product
-                ? "Eco-Score (Green-Score) letter: $grades."
-                : "Eco-Score (Green-Score) letter per product: $grades. Brand score is the average.";
+                ? "Eco-Score (Green-Score) letter: $eco."
+                : "Eco-Score (Green-Score) letter per product: $eco. Brand score is the average.";
         case "welfare":
             $credits = implode(", ", array_map(function ($tag, $c) {
                 return off_label_name($tag) . " +" . rtrim(rtrim(number_format($c, 1), "0"), ".");
@@ -348,7 +376,7 @@ function map_off_product($product, $country = "en:united-kingdom")
     $labels = $product["labels_tags"] ?? [];
 
     $dimension_scores = array_filter([
-        "environment" => off_grade_to_score($env_grade),
+        "environment" => off_grade_to_score($env_grade, off_eco_grade_map()),
         "nutrition"   => off_grade_to_score($nutri_grade),
         "welfare"     => off_welfare_score($labels),
     ], function ($v) { return $v !== null; });
@@ -362,7 +390,7 @@ function map_off_product($product, $country = "en:united-kingdom")
     {
         $input = $dimension === "welfare"
             ? implode(", ", off_recognised_welfare_labels($labels))
-            : strtoupper(trim($dimension === "nutrition" ? $nutri_grade : $env_grade));
+            : off_grade_label($dimension === "nutrition" ? $nutri_grade : $env_grade);
 
         $contributions[$dimension] = [
             "ref"    => $code,
@@ -420,7 +448,8 @@ function off_product_brand_keys($product)
         if (is_string($tag))
         {
             // strip an optional "xx:" language prefix
-            $names[] = preg_replace('/^[a-z]{2}:/', "", $tag);
+            // strip the language prefix, e.g. "xx:", "en:", "fr:"
+            $names[] = preg_replace('/^[^:]*:/', "", $tag);
         }
     }
 
@@ -638,7 +667,13 @@ function get_brand_score_inputs($brand_id)
  */
 function off_brand_tag($name)
 {
-    $slug = mb_strtolower(trim((string) $name));
+    $slug = trim((string) $name);
+    // Open Food Facts tags drop accents: "Café Verde" -> "cafe-verde"
+    if (class_exists("Normalizer"))
+    {
+        $slug = preg_replace('/\p{Mn}+/u', "", Normalizer::normalize($slug, Normalizer::FORM_D));
+    }
+    $slug = mb_strtolower($slug);
     $slug = preg_replace('/[^\p{L}\p{N}]+/u', "-", $slug);
 
     return trim($slug, "-");
@@ -694,9 +729,14 @@ function off_product_method($dimension)
  * score is never overwritten. Returns true on success; $notes says what
  * happened (or would happen, on a dry run).
  */
-function save_brand_products($brand_id, $brand_name, $mapped, $apply, &$notes, $complete = false)
+function save_brand_products($brand_id, $brand_name, $mapped, $apply, &$notes, $complete = false, $options = [])
 {
     $mine = off_products_for_brand($brand_name, $mapped);
+    // the dump's build date, or now for the API
+    $retrieved_at = $options["retrieved_at"] ?? date("Y-m-d H:i:s");
+    // the dump decides ownership for every product at once, so it may move a
+    // product an earlier run filed under another brand
+    $move = !empty($options["move"]);
 
     if (!$apply)
     {
@@ -717,6 +757,7 @@ function save_brand_products($brand_id, $brand_name, $mapped, $apply, &$notes, $
     $ok = true;
     $kept = [];
     $elsewhere = 0;
+    $moved_from = [];
 
     foreach ($mine as $m)
     {
@@ -728,18 +769,25 @@ function save_brand_products($brand_id, $brand_name, $mapped, $apply, &$notes, $
 
         if (!empty($owner) && (int) $owner[0]["brand_id"] !== (int) $brand_id)
         {
-            $elsewhere++;
-            continue;
+            if (!$move)
+            {
+                $elsewhere++;
+                continue;
+            }
+
+            $moved_from[(int) $owner[0]["brand_id"]] = true;
+            $ok = query("UPDATE products SET brand_id = ? WHERE id = ?", $brand_id, $owner[0]["id"]) !== false;
+            if (!$ok) { break; }
         }
 
         $ok = query(
             "INSERT INTO products (brand_id, code, name, name_key, category, labels, source_url, retrieved_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, NOW())
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
              ON DUPLICATE KEY UPDATE name = VALUES(name), name_key = VALUES(name_key),
                  category = VALUES(category), labels = VALUES(labels),
                  source_url = VALUES(source_url), retrieved_at = VALUES(retrieved_at)",
             $brand_id, $p["code"], $p["name"], search_key($p["name"] ?? ""),
-            $p["category"], $p["labels"], $p["source_url"]
+            $p["category"], $p["labels"], $p["source_url"], $retrieved_at
         ) !== false;
         if (!$ok) { break; }
 
@@ -779,54 +827,18 @@ function save_brand_products($brand_id, $brand_name, $mapped, $apply, &$notes, $
         }
     }
 
-    // the brand's derived scores, from every product it now holds
+    // the brand's derived scores, from every product it now holds, and those
+    // of any brand a product was moved away from
     if ($ok)
     {
-        $rows = query(
-            "SELECT ps.dimension, ps.score AS points
-               FROM product_scores ps JOIN products p ON p.id = ps.product_id
-              WHERE p.brand_id = ?
-              ORDER BY p.id",
-            $brand_id
-        );
-        $ok = $rows !== false;
-
-        $by_dimension = [];
-        foreach ($rows ?: [] as $r)
-        {
-            $by_dimension[$r["dimension"]][] = $r;
-        }
-
-        foreach ($by_dimension as $dimension => $contributions)
-        {
-            if (!$ok) { break; }
-
-            $existing = query(
-                "SELECT source FROM brand_scores WHERE brand_id = ? AND dimension = ?",
-                $brand_id, $dimension
-            );
-            $ok = $existing !== false;
-
-            if ($ok && !empty($existing) && ($existing[0]["source"] ?? "") !== OFF_SOURCE)
-            {
-                $notes[] = "kept curated $dimension";
-                continue;
-            }
-
-            $value = off_mean_points($contributions);
-            $ok = $ok && query(
-                "INSERT INTO brand_scores
-                     (brand_id, dimension, score, note, source, source_url, retrieved_at)
-                 VALUES (?, ?, ?, ?, ?, ?, NOW())
-                 ON DUPLICATE KEY UPDATE score = VALUES(score), note = VALUES(note),
-                     source = VALUES(source), source_url = VALUES(source_url),
-                     retrieved_at = VALUES(retrieved_at)",
-                $brand_id, $dimension, $value, "Derived from Open Food Facts", OFF_SOURCE,
-                OFF_CANONICAL . "/brand/" . rawurlencode(off_brand_tag($brand_name))
-            ) !== false;
-
-            $notes[] = "$dimension=$value from " . count($contributions) . " products";
-        }
+        $ok = off_recompute_brand_scores($brand_id, $brand_name, $notes, $retrieved_at);
+    }
+    foreach (array_keys($moved_from) as $other)
+    {
+        if (!$ok) { break; }
+        $name = query("SELECT name FROM brands WHERE id = ?", $other);
+        $other_notes = [];
+        $ok = !empty($name) && off_recompute_brand_scores($other, $name[0]["name"], $other_notes, $retrieved_at);
     }
 
     if (!$ok)
@@ -841,6 +853,71 @@ function save_brand_products($brand_id, $brand_name, $mapped, $apply, &$notes, $
     $notes[] = count($kept) . " products";
     if ($removed) { $notes[] = "removed $removed no longer listed"; }
     if ($elsewhere) { $notes[] = "$elsewhere already filed under another brand"; }
+    if ($moved_from) { $notes[] = "moved products from " . count($moved_from) . " other brand(s)"; }
+
+    return true;
+}
+
+/**
+ * Recomputes a brand's Open Food Facts derived scores as the mean of its
+ * products' scores. Never overwrites a curated score. Call inside the
+ * caller's transaction. Returns false on a database error.
+ */
+function off_recompute_brand_scores($brand_id, $brand_name, &$notes, $retrieved_at)
+{
+    $rows = query(
+        "SELECT ps.dimension, ps.score AS points
+           FROM product_scores ps JOIN products p ON p.id = ps.product_id
+          WHERE p.brand_id = ?
+          ORDER BY p.id",
+        $brand_id
+    );
+    if ($rows === false)
+    {
+        return false;
+    }
+
+    $by_dimension = [];
+    foreach ($rows as $r)
+    {
+        $by_dimension[$r["dimension"]][] = $r;
+    }
+
+    foreach ($by_dimension as $dimension => $contributions)
+    {
+        $existing = query(
+            "SELECT source FROM brand_scores WHERE brand_id = ? AND dimension = ?",
+            $brand_id, $dimension
+        );
+        if ($existing === false)
+        {
+            return false;
+        }
+
+        if (!empty($existing) && ($existing[0]["source"] ?? "") !== OFF_SOURCE)
+        {
+            $notes[] = "kept curated $dimension";
+            continue;
+        }
+
+        $value = off_mean_points($contributions);
+        $ok = query(
+            "INSERT INTO brand_scores
+                 (brand_id, dimension, score, note, source, source_url, retrieved_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?)
+             ON DUPLICATE KEY UPDATE score = VALUES(score), note = VALUES(note),
+                 source = VALUES(source), source_url = VALUES(source_url),
+                 retrieved_at = VALUES(retrieved_at)",
+            $brand_id, $dimension, $value, "Derived from Open Food Facts", OFF_SOURCE,
+            OFF_CANONICAL . "/brand/" . rawurlencode(off_brand_tag($brand_name)), $retrieved_at
+        );
+        if ($ok === false)
+        {
+            return false;
+        }
+
+        $notes[] = "$dimension=$value from " . count($contributions) . " products";
+    }
 
     return true;
 }
@@ -861,4 +938,252 @@ function off_scores_from_products($mapped)
     }
 
     return array_map("off_mean_points", $by_dimension);
+}
+
+// ---------------------------------------------------------------- bulk dump
+
+/**
+ * Columns read from the Open Food Facts export, found by header name.
+ * https://world.openfoodfacts.org/data
+ */
+const OFF_DUMP_COLUMNS = [
+    "code", "url", "product_name", "brands", "brands_tags", "categories_tags",
+    "labels_tags", "stores", "countries_tags", "nutriscore_grade",
+    "environmental_score_grade",
+];
+
+// lines longer than this are treated as malformed and skipped
+const OFF_DUMP_MAX_LINE = 1048576;
+
+/**
+ * Streams an Open Food Facts export (tab separated, one header line): the
+ * full en.openfoodfacts.org.products.csv.gz, or a filtered subset with the
+ * same header names, gzipped or plain. gzopen() reads both, so the file is
+ * never decompressed to disk or loaded into memory.
+ *
+ * Yields one product array per usable row, in the shape the API returns
+ * (tag fields as arrays), ready for map_off_product(). The file is untrusted
+ * data: lines are split on tabs only (no CSV quoting), rows with the wrong
+ * number of fields or no code are skipped and counted in $stats, and nothing
+ * from it is ever executed.
+ *
+ *   $keep          optional function(array $product): bool, applied before yielding
+ *   $stats         receives lines, malformed, kept
+ *   $must_contain  optional text the raw countries_tags field must contain;
+ *                  a fast pre-filter, $keep still decides
+ */
+function off_dump_rows($path, $keep = null, &$stats = null, $must_contain = null)
+{
+    $stats = ["lines" => 0, "malformed" => 0, "kept" => 0];
+
+    $handle = @gzopen($path, "rb");
+    if ($handle === false)
+    {
+        throw new RuntimeException("Cannot open dump: $path");
+    }
+
+    try
+    {
+        $header = gzgets($handle);
+        if ($header === false)
+        {
+            throw new RuntimeException("Dump is empty: $path");
+        }
+
+        $names = explode("\t", rtrim($header, "\r\n"));
+        $index = array_flip($names);
+        $missing = array_diff(["code", "brands_tags", "countries_tags"], $names);
+        if ($missing)
+        {
+            throw new RuntimeException("Dump header lacks: " . implode(", ", $missing));
+        }
+
+        $width = count($names);
+
+        while (($line = gzgets($handle)) !== false)
+        {
+            $stats["lines"]++;
+
+            // a line that hit the end of the buffer without a newline is
+            // either the last line or longer than we accept
+            if (strlen($line) > OFF_DUMP_MAX_LINE)
+            {
+                $stats["malformed"]++;
+                continue;
+            }
+
+            $fields = explode("\t", rtrim($line, "\r\n"));
+            if (count($fields) !== $width)
+            {
+                $stats["malformed"]++;
+                continue;
+            }
+
+            // cheap rejection before building anything: most of the
+            // 4.9 million rows are not sold in the country we want
+            if ($must_contain !== null && strpos($fields[$index["countries_tags"]], $must_contain) === false)
+            {
+                continue;
+            }
+
+            $code = trim($fields[$index["code"]]);
+            if ($code === "" || strlen($code) > 100)
+            {
+                $stats["malformed"]++;
+                continue;
+            }
+
+            $product = ["code" => $code];
+            foreach (OFF_DUMP_COLUMNS as $column)
+            {
+                if ($column === "code") { continue; }
+                $value = isset($index[$column]) ? $fields[$index[$column]] : "";
+                $product[$column] = substr($column, -5) === "_tags"
+                    ? ($value === "" ? [] : array_values(array_filter(array_map("trim", explode(",", $value)), "strlen")))
+                    : trim($value);
+            }
+
+            if ($keep !== null && !$keep($product))
+            {
+                continue;
+            }
+
+            $stats["kept"]++;
+            yield $product;
+        }
+    }
+    finally
+    {
+        gzclose($handle);
+    }
+}
+
+/**
+ * Reads a dump once and returns the mapped products for the brands we hold,
+ * as [brand_id => [code => mapped product]].
+ *
+ * A row is kept when it is sold in $country (null for any) and one of its
+ * brand tags, with the language prefix stripped, normalises to one of our
+ * brand names (brand_match_key(), as for the API). A product is filed under
+ * exactly one brand, because products.code is unique: the first of its own
+ * brand tags that we hold. $stats also gets "shared", the number of products
+ * tagged with more than one of our brands.
+ *
+ *   $brands  rows with id and name
+ */
+function off_dump_products_by_brand($path, $brands, $country, &$stats = null)
+{
+    $by_key = [];
+    foreach ($brands as $b)
+    {
+        $key = brand_match_key($b["name"]);
+        if ($key !== "" && !isset($by_key[$key]))
+        {
+            $by_key[$key] = (int) $b["id"];
+        }
+    }
+
+    $keep = function ($p) use ($by_key, $country) {
+        if ($country !== null && !in_array($country, $p["countries_tags"], true))
+        {
+            return false;
+        }
+        foreach (off_product_brand_keys($p) as $key)
+        {
+            if (isset($by_key[$key])) { return true; }
+        }
+        return false;
+    };
+
+    $out = [];
+    $shared = 0;
+
+    foreach (off_dump_rows($path, $keep, $read, $country) as $product)
+    {
+        $mapped = map_off_product($product, $country);
+        if ($mapped === null || $mapped["product"] === null)
+        {
+            continue;
+        }
+
+        $owners = [];
+        foreach ($mapped["product"]["brand_keys"] as $key)
+        {
+            if (isset($by_key[$key])) { $owners[$by_key[$key]] = true; }
+        }
+        if (count($owners) > 1) { $shared++; }
+
+        // the first of its own tags that we hold; last row wins for a
+        // barcode listed twice
+        $brand_id = array_key_first($owners);
+        foreach ($out as $id => $_)
+        {
+            unset($out[$id][$mapped["product"]["code"]]);
+        }
+        $out[$brand_id][$mapped["product"]["code"]] = $mapped;
+    }
+
+    $stats = $read + ["shared" => $shared];
+
+    return $out;
+}
+
+/**
+ * The date an export was built, from the file's modification time, as a
+ * DATETIME string.
+ */
+function off_dump_date($path)
+{
+    $time = @filemtime($path);
+
+    return date("Y-m-d H:i:s", $time === false ? time() : $time);
+}
+
+/**
+ * What saving $mapped for a brand would change, without writing: products
+ * added and removed against the database, grade counts per dimension, and
+ * the derived score per dimension against the one stored now. Curated
+ * brand scores are reported as kept.
+ */
+function off_plan_brand($brand_id, $mapped)
+{
+    $current = query("SELECT code FROM products WHERE brand_id = ?", $brand_id);
+    $stored = query("SELECT dimension, score, source FROM brand_scores WHERE brand_id = ?", $brand_id);
+    $current = array_column($current ?: [], "code");
+    $codes = array_map(function ($m) { return $m["product"]["code"]; }, $mapped);
+
+    $grades = [];
+    foreach ($mapped as $m)
+    {
+        foreach ($m["contributions"] as $dimension => $c)
+        {
+            $label = $c["input"] ?? "";
+            $grades[$dimension][$label] = ($grades[$dimension][$label] ?? 0) + 1;
+        }
+    }
+
+    $existing = [];
+    foreach ($stored ?: [] as $row)
+    {
+        $existing[$row["dimension"]] = $row;
+    }
+
+    $scores = [];
+    foreach (off_scores_from_products($mapped) as $dimension => $value)
+    {
+        $have = $existing[$dimension] ?? null;
+        $scores[$dimension] = [
+            "new"     => $value,
+            "old"     => $have === null ? null : (float) $have["score"],
+            "curated" => $have !== null && $have["source"] !== OFF_SOURCE,
+        ];
+    }
+
+    return [
+        "products" => count($mapped),
+        "added"    => count(array_diff($codes, $current)),
+        "removed"  => count(array_diff($current, $codes)),
+        "grades"   => $grades,
+        "scores"   => $scores,
+    ];
 }

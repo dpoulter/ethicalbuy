@@ -76,9 +76,9 @@
 
 <h5><?= e($dims["environment"]["label"]) ?></h5>
 <p>
-  Open Food Facts Eco-Score (now called Green-Score), with the same mapping:
-  <?= e(implode(", ", array_map(function ($g, $s) { return strtoupper($g) . " = " . rating_score($s); },
-      array_keys(off_grade_map()), off_grade_map()))) ?>.
+  Open Food Facts Eco-Score (now called Green-Score), which also has A+ and F:
+  <?= e(off_grade_map_text(off_eco_grade_map(), " = ")) ?>, out of 10. F scores 1, the lowest
+  score we use. "Unknown", "not applicable" and blank grades are left unscored.
 </p>
 
 <h5><?= e($dims["welfare"]["label"]) ?></h5>
