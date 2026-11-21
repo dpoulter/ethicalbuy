@@ -1196,7 +1196,8 @@ check("layout links the site stylesheet after Bootstrap",
     && strpos($o, 'bootstrap.min.css') < strpos($o, '/assets/site.css'));
 check("stylesheet exists", is_file(__DIR__ . "/../public/assets/site.css"));
 check("footer keeps the Open Food Facts attribution", strpos($o, 'Open Database Licence (ODbL)') !== false);
-foreach ([9.5 => "Excellent", 7 => "Good", 5 => "Mixed", 4 => "Poor", 2 => "Avoid"] as $r => $label) {
+foreach (["9.5" => "Excellent", "7" => "Good", "5" => "Mixed", "4" => "Poor", "2" => "Avoid"] as $r => $label) {
+    $r = (float) $r;
     $rating = $r;
     ob_start(); require(TEMPLATE_DIR . "/partials/rating_badge.php"); $badge = ob_get_clean();
     check("badge $r shows score and label",
