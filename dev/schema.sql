@@ -13,6 +13,7 @@
 -- Dependants first. Later migrations add tables with foreign keys back to
 -- brands and owners, so dropping the parents first fails on a rebuild.
 -- Any new migration that adds a table referencing these must be dropped here.
+DROP TABLE IF EXISTS brand_score_inputs;
 DROP TABLE IF EXISTS brand_scores;
 DROP TABLE IF EXISTS owner_company_candidates;
 

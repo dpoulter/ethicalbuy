@@ -122,23 +122,70 @@
           <?php foreach ($breakdown as $row): ?>
             <tr<?= $row["counted"] ? "" : ' class="text-muted"' ?>>
               <?php
-                $ev = ($row["score"] !== null) ? ($scores[$row["key"]] ?? []) : [];
-                $evNote = trim((string) ($ev["note"] ?? ""));
-                $evSource = trim((string) ($ev["source"] ?? ""));
-                $evUrl = trim((string) ($ev["source_url"] ?? ""));
+                $stored = $row["score"] !== null ? ($scores[$row["key"]] ?? null) : null;
+                $derived = $stored !== null && ($stored["source"] ?? "") === OFF_SOURCE;
+                // inputs only explain a derived score; a hand edit in /admin supersedes them
+                $rowInputs = $derived ? (($inputs ?? [])[$row["key"]] ?? []) : [];
               ?>
               <td>
-                <?= e($row["label"]) ?>
-                <?php if ($evNote !== "" || $evSource !== ""): ?>
-                  <div class="small text-muted score-evidence">
-                    <?= e($evNote) ?>
-                    <?php if ($evNote !== "" && $evSource !== ""): ?>&middot;<?php endif ?>
-                    <?php if ($evSource !== "" && preg_match('~^https?://~i', $evUrl)): ?>
-                      <a href="<?= e($evUrl) ?>" target="_blank" rel="noopener noreferrer"><?= e($evSource) ?></a>
-                    <?php elseif ($evSource !== ""): ?>
-                      <?= e($evSource) ?>
-                    <?php endif ?>
-                  </div>
+                <?php if ($row["score"] === null): ?>
+                  <?= e($row["label"]) ?>
+                <?php else: ?>
+                  <details class="dimension-derivation">
+                    <summary><?= e($row["label"]) ?></summary>
+                    <div class="small mt-2">
+                      <?php if ($rowInputs): ?>
+                        <?php
+                          $method = off_dimension_method($row["key"]);
+                          $shown = array_slice($rowInputs, 0, DERIVATION_ROWS_SHOWN);
+                          $more = count($rowInputs) - count($shown);
+                          $fmt = function ($n) { return rtrim(rtrim(number_format((float) $n, 1), "0"), "."); };
+                        ?>
+                        <?php if ($method !== null): ?>
+                          <p class="text-muted mb-2 derivation-method"><?= e($method) ?></p>
+                        <?php endif ?>
+                        <table class="table table-sm mb-1 derivation-products">
+                          <thead>
+                            <tr><th>Product</th><th><?= $row["key"] === "welfare" ? "Labels" : "Grade" ?></th><th>Points</th></tr>
+                          </thead>
+                          <tbody>
+                            <?php foreach ($shown as $in): ?>
+                              <?php
+                                $inLabel = trim((string) ($in["label"] ?? "")) !== "" ? $in["label"] : ("Product " . ($in["ref"] ?? ""));
+                                $inUrl = trim((string) ($in["url"] ?? ""));
+                              ?>
+                              <tr>
+                                <td>
+                                  <?php if (preg_match('~^https?://~i', $inUrl)): ?>
+                                    <a href="<?= e($inUrl) ?>" target="_blank" rel="noopener noreferrer"><?= e($inLabel) ?></a>
+                                  <?php else: ?>
+                                    <?= e($inLabel) ?>
+                                  <?php endif ?>
+                                </td>
+                                <td><?= e($in["input"] ?? "") ?></td>
+                                <td><?= e($fmt($in["points"])) ?></td>
+                              </tr>
+                            <?php endforeach ?>
+                          </tbody>
+                        </table>
+                        <?php if ($more > 0): ?>
+                          <p class="text-muted mb-1">and <?= (int) $more ?> more</p>
+                        <?php endif ?>
+                        <div class="font-monospace derivation-sum">
+                          (<?= e(implode(" + ", array_map($fmt, array_column($rowInputs, "points")))) ?>) / <?= count($rowInputs) ?> = <?= e(number_format($row["score"], 1)) ?>
+                        </div>
+                        <p class="text-muted mt-1 mb-0">Product data from Open Food Facts (ODbL).</p>
+                      <?php elseif ($derived): ?>
+                        <p class="text-muted mb-1">Product detail not recorded yet.</p>
+                        <?php $srcUrl = trim((string) ($stored["source_url"] ?? "")); ?>
+                        <?php if (preg_match('~^https?://~i', $srcUrl)): ?>
+                          <p class="mb-0">Source: <a href="<?= e($srcUrl) ?>" target="_blank" rel="noopener noreferrer">Open Food Facts</a></p>
+                        <?php endif ?>
+                      <?php else: ?>
+                        <p class="text-muted mb-0">Entered by hand.</p>
+                      <?php endif ?>
+                    </div>
+                  </details>
                 <?php endif ?>
               </td>
               <td>
@@ -161,7 +208,8 @@
       </table>
     </div>
 
-    <h6 class="mt-4">How this number is worked out</h6>
+    <details class="mt-4 score-working">
+    <summary class="h6">How this number is worked out</summary>
     <?php if ($personal["score"] === null): ?>
       <p class="small text-muted mb-0">
         None of the dimensions you weighted has data for this brand, so there
@@ -187,6 +235,7 @@
         </div>
       </div>
     <?php endif ?>
+    </details>
 
     <?php
       $excluded = array_values(array_filter($breakdown, function ($r) { return !$r["counted"]; }));

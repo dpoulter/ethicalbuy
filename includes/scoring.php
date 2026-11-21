@@ -39,6 +39,9 @@ const WEIGHT_DEFAULT = 3;
 // below this fraction of requested weight, a score is flagged as thin
 const COVERAGE_LOW = 0.5;
 
+// products listed per dimension on the brand page before "and N more"
+const DERIVATION_ROWS_SHOWN = 15;
+
 const PRIORITIES_COOKIE = "priorities";
 
 /**

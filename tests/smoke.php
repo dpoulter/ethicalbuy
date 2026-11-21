@@ -183,38 +183,72 @@ check("brand: alternative link urlencoded", strpos($out, 'brand.php?brand=Other%
 check("brand: breadcrumb category link urlencoded", strpos($out, 'search_string=Baby%27s+%22Food%22') !== false);
 check("brand: alternative rating badge", strpos($out, '3/10') !== false);
 
-section("brand.php score evidence");
-$evValues = ["environment" => 8, "nutrition" => 6, "welfare" => null];
+section("brand.php dimension derivation");
+$offScore = function ($v, $url = "https://world.openfoodfacts.org/product/1") {
+    return ["score" => $v, "note" => "Derived from Open Food Facts", "source" => OFF_SOURCE,
+            "source_url" => $url, "retrieved_at" => "2026-11-01 10:00:00"];
+};
+$nutriInputs = [];
+foreach (["b", "b", "c", "b"] as $i => $g) {
+    $nutriInputs[] = ["ref" => "p$i", "label" => "Oat <Drink> $i", "input" => strtoupper($g),
+        "points" => off_grade_to_score($g), "url" => "https://world.openfoodfacts.org/product/p$i"];
+}
+$nutriInputs[1]["url"] = "javascript:alert(1)";
+$evValues = ["editorial" => 8, "environment" => 8, "nutrition" => 7.5, "welfare" => null];
 $evOut = renderTo("brand.php", [
     "title" => "Ev", "brand" => $evilRow, "alternatives" => [],
     "weights" => default_weights(),
     "personal" => personal_score($evValues, default_weights()),
     "breakdown" => score_breakdown($evValues, default_weights()),
-    "scores" => [
-        "environment" => ["dimension" => "environment", "score" => 8,
-            "note" => "Eco-Score <b>B</b> across 3 products", "source" => "Open Food Facts",
-            "source_url" => "https://world.openfoodfacts.org/brand/x", "retrieved_at" => "2026-11-01 10:00:00"],
-        "nutrition" => ["dimension" => "nutrition", "score" => 6,
-            "note" => null, "source" => null, "source_url" => null, "retrieved_at" => null],
-    ],
+    "scores" => ["environment" => $offScore(8), "nutrition" => $offScore(7.5)],
+    "inputs" => ["nutrition" => $nutriInputs],
     "chosen" => true,
 ]);
-structureChecks("brand evidence", $evOut);
-check("evidence: note rendered escaped", strpos($evOut, 'Eco-Score &lt;b&gt;B&lt;/b&gt; across 3 products') !== false);
-check("evidence: source link", strpos($evOut, '<a href="https://world.openfoodfacts.org/brand/x" target="_blank" rel="noopener noreferrer">Open Food Facts</a>') !== false);
-check("evidence: no collapsing", strpos($evOut, '<details class="score-evidence"') === false);
-check("evidence: score without note shows no evidence line", substr_count($evOut, 'score-evidence') === 1);
-check("evidence: unscored still Not assessed", strpos($evOut, 'Not assessed') !== false);
-$jsOut = renderTo("brand.php", [
-    "title" => "Ev", "brand" => $evilRow, "alternatives" => [],
+structureChecks("brand derivation", $evOut);
+check("derivation: one collapsed details per scored dimension",
+    substr_count($evOut, '<details class="dimension-derivation">') === 3);
+check("derivation: no details opened by default", strpos($evOut, '<details open') === false);
+check("derivation: method generated from grade map",
+    strpos($evOut, 'Nutri-Score letter per product: A 10, B 8, C 6, D 4, E 2. Brand score is the average.') !== false);
+check("derivation: product linked", strpos($evOut,
+    '<a href="https://world.openfoodfacts.org/product/p0" target="_blank" rel="noopener noreferrer">Oat &lt;Drink&gt; 0</a>') !== false);
+check("derivation: non-http product url not linked", strpos($evOut, 'javascript:') === false
+    && strpos($evOut, 'Oat &lt;Drink&gt; 1') !== false);
+check("derivation: sum line", strpos($evOut, '(8 + 8 + 6 + 8) / 4 = 7.5') !== false);
+check("derivation: not-yet-recorded message for OFF score without inputs",
+    strpos($evOut, 'Product detail not recorded yet.') !== false);
+check("derivation: editorial is entered by hand", strpos($evOut, 'Entered by hand.') !== false);
+check("derivation: unscored still Not assessed", strpos($evOut, 'Not assessed') !== false);
+check("derivation: ODbL attribution", strpos($evOut, 'ODbL') !== false);
+check("derivation: old evidence line gone", strpos($evOut, 'score-evidence') === false);
+
+$curOut = renderTo("brand.php", [
+    "title" => "Cur", "brand" => $evilRow, "alternatives" => [],
     "weights" => default_weights(),
-    "personal" => personal_score($evValues, default_weights()),
-    "breakdown" => score_breakdown($evValues, default_weights()),
-    "scores" => ["environment" => ["score" => 8, "note" => "n", "source" => "S",
-        "source_url" => "javascript:alert(1)", "retrieved_at" => null]],
+    "personal" => personal_score(["nutrition" => 4], default_weights()),
+    "breakdown" => score_breakdown(["nutrition" => 4], default_weights()),
+    "scores" => ["nutrition" => ["score" => 4, "note" => "x", "source" => "curated", "source_url" => null, "retrieved_at" => null]],
+    "inputs" => ["nutrition" => $nutriInputs], "chosen" => true,
+]);
+check("derivation: curated score ignores leftover inputs",
+    strpos($curOut, 'derivation-products') === false && strpos($curOut, 'Entered by hand.') !== false);
+
+$many = [];
+for ($i = 0; $i < 20; $i++) {
+    $many[] = ["ref" => "m$i", "label" => "Item $i", "input" => "A", "points" => 10.0,
+               "url" => "https://world.openfoodfacts.org/product/m$i"];
+}
+$manyOut = renderTo("brand.php", [
+    "title" => "Many", "brand" => $evilRow, "alternatives" => [],
+    "weights" => default_weights(),
+    "personal" => personal_score(["nutrition" => 10], default_weights()),
+    "breakdown" => score_breakdown(["nutrition" => 10], default_weights()),
+    "scores" => ["nutrition" => $offScore(10)], "inputs" => ["nutrition" => $many],
     "chosen" => true,
 ]);
-check("evidence: non-http url not linked", strpos($jsOut, 'javascript:') === false && preg_match('~score-evidence">\s*n\s*&middot;\s*S\s*</div>~', $jsOut) === 1);
+check("derivation: first 15 listed", strpos($manyOut, 'Item 14') !== false && strpos($manyOut, 'Item 15<') === false);
+check("derivation: and N more", strpos($manyOut, 'and 5 more') !== false);
+check("derivation: sum covers all", strpos($manyOut, ') / 20 = 10.0') !== false);
 
 section("brand.php worked calculation");
 function calcResult($out) {
@@ -240,6 +274,8 @@ check("calc: result equals headline (default)", calcResult($o) === rating_score(
 check("calc: term line", strpos($o, 'Nutrition 6.0 &times; 3 = 18.0') !== false);
 check("calc: sum and division", strpos($o, '(24.0 + 24.0 + 18.0 + 21.0) / (3 + 3 + 3 + 3) = 87.0 / 12') !== false);
 check("calc: plain average note", strpos($o, 'this is a plain average') !== false);
+check("calc: working inside a collapsed details",
+    preg_match('~<details class="mt-4 score-working">\s*<summary[^>]*>How this number is worked out</summary>.*score-calc-result.*?</details>~s', $o) === 1);
 check("calc: missing listed as excluded", preg_match('~Diet &amp; animal welfare:\s*no data \(excluded~', $o) === 1);
 
 $_COOKIE[PRIORITIES_COOKIE] = "editorial=5&environment=0&nutrition=2&welfare=4&ownership=1";
@@ -739,6 +775,79 @@ $avg = collapse_off_products([
     ["code"=>"2","brands"=>"Avg Co","countries_tags"=>["en:united-kingdom"],"ecoscore_grade"=>"c"],
 ]);
 check("brand score averages across products", $avg[0]["scores"]["environment"] === 8.0);
+
+section("OFF per-product contributions");
+$offProducts = [
+    ["code"=>"11","product_name"=>"Oat Drink","brands"=>"Inputs Co","countries_tags"=>["en:united-kingdom"],
+     "nutriscore_grade"=>"b","ecoscore_grade"=>"a","labels_tags"=>["en:vegan","en:organic"]],
+    ["code"=>"12","product_name"=>"Soya Drink","brands"=>"Inputs Co","countries_tags"=>["en:united-kingdom"],
+     "nutriscore_grade"=>"c","labels_tags"=>["en:some-junk"]],
+    ["code"=>"13","product_name"=>"Almond Drink","brands"=>"Inputs Co","countries_tags"=>["en:united-kingdom"],
+     "nutriscore_grade"=>"a","ecoscore_grade"=>"d"],
+];
+$one = map_off_product($offProducts[0]);
+check("map: contribution per scored dimension",
+    array_keys($one["contributions"]) === array_keys($one["scores"]));
+check("map: nutrition input is the grade", $one["contributions"]["nutrition"]["input"] === "B");
+check("map: welfare input lists labels", $one["contributions"]["welfare"]["input"] === "Organic, Vegan"
+    || $one["contributions"]["welfare"]["input"] === "Vegan, Organic");
+check("map: contribution carries product name and url",
+    $one["contributions"]["nutrition"]["label"] === "Oat Drink"
+    && $one["contributions"]["nutrition"]["url"] === "https://world.openfoodfacts.org/product/11");
+$ic = collapse_off_products($offProducts)[0];
+check("collapse: inputs per product", count($ic["inputs"]["nutrition"]) === 3
+    && count($ic["inputs"]["environment"]) === 2 && count($ic["inputs"]["welfare"]) === 1);
+foreach ($ic["scores"] as $dim => $score) {
+    $pts = array_column($ic["inputs"][$dim], "points");
+    check("collapse: mean of $dim inputs equals score",
+        round(array_sum($pts) / count($pts), 1) === $score);
+}
+check("collapse: scores unchanged", $ic["scores"] === ["environment" => 7.0, "nutrition" => 8.0, "welfare" => 8.5]);
+
+section("save_dimension_scores (needs the dev database)");
+query("DELETE FROM brands WHERE name = ?", "Inputs Test Co");
+query("INSERT INTO brands (name, rating) VALUES (?, NULL)", "Inputs Test Co");
+$tb = query("SELECT id FROM brands WHERE name = ?", "Inputs Test Co");
+$tid = (int) ($tb[0]["id"] ?? 0);
+check("test brand created", $tid > 0);
+query("INSERT INTO brand_scores (brand_id, dimension, score, note, source) VALUES (?, 'welfare', 9, 'by hand', 'editor')", $tid);
+// the importer writes as its own database user, so run the saves as that user
+$child = function ($calls) use ($tid, $ic) {
+    $cmd = "DB_USER=" . escapeshellarg(getenv("IMPORT_DB_USER") ?: "ethicalbuy_import")
+         . " DB_PASSWORD=" . escapeshellarg(getenv("IMPORT_DB_PASSWORD") ?: "ethicalbuy_import_dev")
+         . " php " . escapeshellarg(__DIR__ . "/save_scores_child.php");
+    $proc = proc_open($cmd, [0 => ["pipe", "r"], 1 => ["pipe", "w"]], $pipes);
+    fwrite($pipes[0], json_encode(["brand_id" => $tid, "calls" => $calls]));
+    fclose($pipes[0]);
+    $out = stream_get_contents($pipes[1]);
+    proc_close($proc);
+    return json_decode($out, true);
+};
+$url = "https://world.openfoodfacts.org/product/11";
+$r = $child([
+    ["scores" => $ic["scores"], "url" => $url, "apply" => true, "inputs" => $ic["inputs"]],
+    ["scores" => $ic["scores"], "url" => $url, "apply" => true, "inputs" => $ic["inputs"]],
+]);
+check("save ok", ($r[0]["ok"] ?? false) && ($r[1]["ok"] ?? false));
+$cnt = query("SELECT dimension, COUNT(*) AS n FROM brand_score_inputs WHERE brand_id = ? GROUP BY dimension ORDER BY dimension", $tid);
+check("inputs replaced, not duplicated", $cnt === [["dimension" => "environment", "n" => 2], ["dimension" => "nutrition", "n" => 3]]);
+check("curated dimension gets no inputs", in_array("kept curated welfare", $r[1]["notes"] ?? [], true)
+    && !isset(get_brand_score_inputs($tid)["welfare"]));
+check("curated score untouched", (float) query("SELECT score FROM brand_scores WHERE brand_id = ? AND dimension = 'welfare'", $tid)[0]["score"] === 9.0);
+$mean = query(
+    "SELECT s.dimension, s.score, ROUND(AVG(i.points), 1) AS mean
+       FROM brand_scores s JOIN brand_score_inputs i ON i.brand_id = s.brand_id AND i.dimension = s.dimension
+      WHERE s.brand_id = ? GROUP BY s.dimension, s.score", $tid);
+check("stored inputs average to stored score", is_array($mean) && count($mean) === 2 && array_reduce($mean,
+    function ($ok, $r) { return $ok && (float) $r["score"] === (float) $r["mean"]; }, true));
+$fewer = $ic["inputs"]; $fewer["nutrition"] = array_slice($fewer["nutrition"], 0, 1);
+$child([["scores" => ["nutrition" => off_mean_points($fewer["nutrition"])], "url" => null, "apply" => true, "inputs" => $fewer]]);
+check("fewer products on refresh replace the old rows",
+    count(get_brand_score_inputs($tid)["nutrition"] ?? []) === 1);
+$child([["scores" => ["environment" => 2.0], "url" => null, "apply" => false, "inputs" => []]]);
+check("dry run writes nothing", (float) query("SELECT score FROM brand_scores WHERE brand_id = ? AND dimension = 'environment'", $tid)[0]["score"] === 7.0);
+query("DELETE FROM brands WHERE id = ?", $tid);
+check("inputs cascade on brand delete", query("SELECT COUNT(*) AS n FROM brand_score_inputs WHERE brand_id = ?", $tid)[0]["n"] == 0);
 
 echo $fails === 0 ? "\nALL PASS\n" : "\n$fails FAILURE(S)\n";
 exit($fails === 0 ? 0 : 1);
