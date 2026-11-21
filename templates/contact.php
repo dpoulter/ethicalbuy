@@ -1,3 +1,4 @@
+<div class="prose">
 <h3>Contact</h3>
 
 <?php if ($sent): ?>
@@ -57,3 +58,4 @@
 
   <button type="submit" class="btn btn-primary">Send message</button>
 </form>
+</div>

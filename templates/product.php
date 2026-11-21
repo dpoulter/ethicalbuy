@@ -12,7 +12,7 @@
   </ol>
 </nav>
 
-<div class="card mb-4">
+<div class="card mb-4 page-hero">
   <div class="card-body">
     <div class="d-flex justify-content-between align-items-start flex-wrap gap-2">
       <div>
@@ -21,7 +21,7 @@
           by <a href="brand.php?brand=<?= urlencode($product["brand"]) ?>"><?= e($product["brand"]) ?></a>
         </div>
       </div>
-      <div class="text-end">
+      <div class="text-end score-hero">
         <div class="small text-muted mb-1">
           <?= $chosen ? "Your rating" : "Balanced rating" ?>
         </div>

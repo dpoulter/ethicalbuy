@@ -1004,8 +1004,8 @@ $runP($bj, [["fn" => "products", "brand" => "Bén & Jerry's Test", "apply" => tr
 ]]]);
 [$st, $html] = runPage("search.php", ["q" => "oat"]);
 structureChecks("search groups", $html);
-check("search: two groups in order", $st === 200 && strpos($html, '<h4 class="mt-4">Brands</h4>') !== false
-    && strpos($html, '<h4 class="mt-4">Brands</h4>') < strpos($html, 'id="products">Products</h4>'));
+check("search: two groups in order", $st === 200 && strpos($html, 'group-heading">Brands</h4>') !== false
+    && strpos($html, 'group-heading">Brands</h4>') < strpos($html, 'id="products">Products</h4>'));
 $brandsPart = substr($html, 0, strpos($html, 'id="products">Products</h4>'));
 $productsPart = substr($html, strpos($html, 'id="products">Products</h4>'));
 check("search: brand matched by name", strpos($brandsPart, 'Oatsome Test') !== false);
@@ -1031,8 +1031,12 @@ check("search: stopword query does not error", $st === 200);
 check("search: old parameter still works", strpos($html, 'href="brand.php?brand=Prodco"') !== false);
 // InnoDB's full-text index can trail a commit from another connection by a
 // moment; wait for it rather than fail on timing
-for ($wait = 0; $wait < 20 && search_products("bulk")[1] < 30; $wait++) { usleep(100000); }
-[$st, $html] = runPage("search.php", ["q" => "bulk"]);
+// (checked through a fresh connection, as the page uses one)
+for ($wait = 0; $wait < 30; $wait++) {
+    [$st, $html] = runPage("search.php", ["q" => "bulk"]);
+    if (strpos($html, '30 products matched') !== false) { break; }
+    usleep(200000);
+}
 check("search: products paginated", strpos($html, '30 products matched') !== false && strpos($html, 'Page 1 of 2') !== false
     && substr_count($html, 'href="product.php?code=') === 25);
 [$st, $html] = runPage("search.php", ["q" => "bulk", "page" => "2"]);
@@ -1184,6 +1188,34 @@ check("about: ownership table generated", substr_count($o, '<td>Multinational gr
 check("about: no longer says ownership is hand entered", strpos($o, 'Ownership</h5>') !== false
     && strpos($o, '>Our overall view</h5>') !== false);
 query("DELETE FROM brands WHERE name LIKE 'Own Test %'");
+
+section("visual refresh");
+$o = renderTo("about.php", ["title" => "About"]);
+check("layout links the site stylesheet after Bootstrap",
+    strpos($o, '<link href="/assets/site.css" rel="stylesheet">') !== false
+    && strpos($o, 'bootstrap.min.css') < strpos($o, '/assets/site.css'));
+check("stylesheet exists", is_file(__DIR__ . "/../public/assets/site.css"));
+check("footer keeps the Open Food Facts attribution", strpos($o, 'Open Database Licence (ODbL)') !== false);
+foreach ([9.5 => "Excellent", 7 => "Good", 5 => "Mixed", 4 => "Poor", 2 => "Avoid"] as $r => $label) {
+    $rating = $r;
+    ob_start(); require(TEMPLATE_DIR . "/partials/rating_badge.php"); $badge = ob_get_clean();
+    check("badge $r shows score and label",
+        strpos($badge, '<span class="score__value">' . rating_score($r) . '</span>') !== false
+        && strpos($badge, '<span class="score__label">' . $label . '</span>') !== false
+        && strpos($badge, 'score--' . rating_class($r)) !== false);
+}
+$rating = null;
+ob_start(); require(TEMPLATE_DIR . "/partials/rating_badge.php"); $badge = ob_get_clean();
+check("unrated badge says Not rated", strpos($badge, 'Not rated') !== false && strpos($badge, 'score--none') !== false);
+$css = file_get_contents(__DIR__ . "/../public/assets/site.css");
+foreach (["success", "primary", "secondary", "warning", "danger"] as $band) {
+    check("css defines score band $band", strpos($css, ".score--$band") !== false && strpos($css, "--score-$band-bg") !== false);
+}
+check("css makes no external requests", preg_match('~url\(|@import|https?://~i', $css) === 0);
+$_SERVER["SCRIPT_NAME"] = "/search.php";
+$o = renderTo("about.php", ["title" => "About"]);
+unset($_SERVER["SCRIPT_NAME"]);
+check("nav marks the current page", strpos($o, 'class="nav-link active" href="/search.php" aria-current="page"') !== false);
 
 echo $fails === 0 ? "\nALL PASS\n" : "\n$fails FAILURE(S)\n";
 exit($fails === 0 ? 0 : 1);

@@ -12,11 +12,11 @@
   </ol>
 </nav>
 
-<div class="card mb-4">
+<div class="card mb-4 page-hero">
   <div class="card-body">
     <div class="d-flex justify-content-between align-items-start flex-wrap gap-2">
       <h3 class="card-title mb-0"><?= e($brand["brand"]) ?></h3>
-      <div class="text-end">
+      <div class="text-end score-hero">
         <div class="small text-muted mb-1">
           <?= $chosen ? "Your rating" : "Balanced rating" ?>
         </div>
@@ -64,7 +64,7 @@
         <dt class="col-sm-3">Certifications</dt>
         <dd class="col-sm-9">
           <?php foreach (explode(",", $brand["certifications"]) as $certification): ?>
-            <span class="badge text-bg-light border me-1"><?= e(trim($certification)) ?></span>
+            <span class="pill me-1"><?= e(trim($certification)) ?></span>
           <?php endforeach ?>
         </dd>
       <?php endif ?>
@@ -125,7 +125,7 @@
         <p class="mb-0">No products match &ldquo;<?= e($product_filter) ?>&rdquo;.</p>
       <?php else: ?>
         <div class="table-responsive">
-          <table class="table table-sm align-middle brand-products">
+          <table class="table table-sm align-middle table-cards brand-products">
             <thead>
               <tr>
                 <th>Product</th>
@@ -177,7 +177,7 @@
   <h4>Other brands in <?= e($brand["category"] ?? "this category") ?></h4>
   <p class="text-muted">Best rated first.</p>
 
-  <ul class="list-group mb-4">
+  <ul class="list-group mb-4 brand-list">
     <?php foreach ($alternatives as $alt): ?>
       <?php $alt_class = rating_class($alt["personal"]["score"]); ?>
       <li class="list-group-item<?= $alt_class === "" ? "" : " list-group-item-" . $alt_class ?>">

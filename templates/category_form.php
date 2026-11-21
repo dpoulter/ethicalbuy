@@ -1,6 +1,7 @@
+<section class="hero">
 <h3>Browse by Category</h3>
 
-<div class="row g-2 align-items-end mb-3">
+<div class="row g-2 align-items-end">
   <div class="col-md-6">
     <label for="categorySelect" class="form-label">Select Category:</label>
     <select class="form-select" id="categorySelect">
@@ -19,9 +20,11 @@
   </div>
 </div>
 
+</section>
+
 <?php require(TEMPLATE_DIR . "/partials/rating_legend.php"); ?>
 
-<ul class="list-group" id="brandList"></ul>
+<ul class="list-group brand-list" id="brandList"></ul>
 
 <script type="application/json" id="brandsData"><?= json_for_html($categories) ?></script>
 
@@ -41,12 +44,19 @@
   }
 
   function ratingBadge(b) {
+    // same markup as partials/rating_badge.php, so site.css styles both
     const span = document.createElement('span');
-    span.className = 'badge ' +
-      (b.ratingClass ? 'text-bg-' + b.ratingClass : 'text-bg-light border');
-    span.textContent = b.ratingLabel
-      ? b.ratingScore + ' · ' + b.ratingLabel
-      : b.ratingScore;
+    span.className = 'score score--' + (b.ratingClass || 'none');
+    const value = document.createElement('span');
+    value.className = 'score__value' + (b.ratingLabel ? '' : ' score__value--text');
+    value.textContent = b.ratingScore;
+    span.appendChild(value);
+    if (b.ratingLabel) {
+      const label = document.createElement('span');
+      label.className = 'score__label';
+      label.textContent = b.ratingLabel;
+      span.appendChild(label);
+    }
     if (b.thin) { span.title = 'Based on only part of what you said matters'; }
     return span;
   }
