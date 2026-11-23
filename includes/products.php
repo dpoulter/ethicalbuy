@@ -37,6 +37,7 @@ function get_product($code)
     $rows = query(
         "SELECT p.id, p.code, p.name, p.category AS product_category, p.labels,
                 p.source_url AS product_url, p.retrieved_at AS product_retrieved_at,
+                p.image_url,
                 " . prefixed_columns("brand_v", BRAND_DETAIL_COLUMNS) . "
            FROM products p
            JOIN brand_v ON brand_v.brand_id = p.brand_id
@@ -109,7 +110,7 @@ function product_score_values($product_scores, $brand_values)
 function get_brand_products($brand_id)
 {
     $rows = query(
-        "SELECT id, code, name, labels FROM products WHERE brand_id = ? ORDER BY name",
+        "SELECT id, code, name, labels, image_url FROM products WHERE brand_id = ? ORDER BY name",
         (int) $brand_id
     );
 
@@ -280,7 +281,7 @@ function search_products($term)
     $words = explode(" ", $key);
     $fulltext = count(array_filter($words, function ($w) { return mb_strlen($w) >= 3; })) === count($words);
 
-    $select = "SELECT p.id, p.code, p.name, p.brand_id, b.name AS brand, b.rating,
+    $select = "SELECT p.id, p.code, p.name, p.brand_id, p.image_url, b.name AS brand, b.rating,
                       CASE WHEN p.name_key = ? THEN 0 WHEN p.name_key LIKE ? THEN 1 ELSE 2 END AS `match`
                  FROM products p JOIN brands b ON b.id = p.brand_id";
     $like = addcslashes($key, "%_\\");
@@ -402,4 +403,47 @@ function ownership_derivation($stored)
         "note"     => $stored["note"] ?? null,
         "points"   => (float) $stored["score"],
     ];
+}
+
+/**
+ * Photo for each brand, as [brand_id => image_url]: the image of the brand's
+ * most scanned product that has one. Brands with no product photo are
+ * absent. Computed on read; there is no brand image table.
+ */
+function brand_images($brand_ids)
+{
+    $ids = array_values(array_unique(array_map("intval", array_filter((array) $brand_ids, "is_numeric"))));
+    if (!$ids)
+    {
+        return [];
+    }
+
+    $rows = query(
+        "SELECT brand_id, image_url FROM (
+             SELECT brand_id, image_url,
+                    ROW_NUMBER() OVER (PARTITION BY brand_id ORDER BY scans IS NULL, scans DESC, id) AS rn
+               FROM products
+              WHERE image_url IS NOT NULL
+                AND brand_id IN (" . implode(",", array_fill(0, count($ids), "?")) . ")
+         ) ranked
+         WHERE rn = 1",
+        ...$ids
+    );
+
+    $out = [];
+    foreach ($rows ?: [] as $row)
+    {
+        $out[(int) $row["brand_id"]] = $row["image_url"];
+    }
+
+    return $out;
+}
+
+/**
+ * True for a URL we are willing to put in an img src: Open Food Facts'
+ * image servers over HTTPS. Checked again on output, not just on import.
+ */
+function is_product_image_url($url)
+{
+    return is_string($url) && off_image_url($url) === $url;
 }

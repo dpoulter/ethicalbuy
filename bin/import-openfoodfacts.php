@@ -206,7 +206,8 @@ function build_search_url($category, $brand, $page)
     $fields = "code,product_name,brands,brands_tags,categories_tags," .
               "countries_tags,labels_tags,stores,stores_tags," .
               // both spellings: "environmental_score_grade" is the newer name
-              "ecoscore_grade,environmental_score_grade,nutriscore_grade";
+              "ecoscore_grade,environmental_score_grade,nutriscore_grade," .
+              "image_small_url,unique_scans_n";
 
     $params = [
         "fields"    => $fields,
@@ -492,6 +493,8 @@ if ($refresh)
     $zero = [];
     $changes = [];
     $total_products = 0;
+    $total_images = 0;
+    $brands_with_image = 0;
 
     foreach ($targets as $t)
     {
@@ -534,7 +537,9 @@ if ($refresh)
             $grade_bits[] = $dimension . " " . implode(" ", array_map(function ($g, $n) { return "$g:$n"; }, array_keys($counts), $counts));
         }
 
-        fwrite(STDOUT, sprintf("  %-28s %4d products (+%d -%d)\n", $t["name"], $plan["products"], $plan["added"], $plan["removed"]));
+        fwrite(STDOUT, sprintf("  %-28s %4d products (+%d -%d), %d with a photo\n", $t["name"], $plan["products"], $plan["added"], $plan["removed"], $plan["images"]));
+        $total_images += $plan["images"];
+        if ($plan["images"] > 0) { $brands_with_image++; }
         if ($grade_bits) { fwrite(STDOUT, "      grades: " . implode("; ", $grade_bits) . "\n"); }
         if ($score_bits) { fwrite(STDOUT, "      scores: " . implode("; ", $score_bits) . "\n"); }
 
@@ -553,6 +558,7 @@ if ($refresh)
 
     fwrite(STDOUT, "\nTotals\n");
     fwrite(STDOUT, sprintf("  %-12s %d\n", "products", $total_products));
+    fwrite(STDOUT, sprintf("  %-12s %d products, %d brands with at least one\n", "with photo", $total_images, $brands_with_image));
     foreach ($stats as $key => $count)
     {
         fwrite(STDOUT, sprintf("  %-12s %d\n", $key, $count));

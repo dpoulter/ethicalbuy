@@ -89,6 +89,7 @@ render("search.php", [
     "submitted" => $submitted,
     "results" => $results,
     "products" => $products,
+    "brand_images" => brand_images(array_column($results, "brand_id")),
     "product_total" => $product_total,
     "product_page" => $product_page,
     "product_pages" => $product_pages,

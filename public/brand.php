@@ -86,4 +86,6 @@ render("brand.php", [
     "product_page" => $product_page,
     "product_pages" => $product_pages,
     "product_filter" => $product_filter,
+    "brand_image" => brand_images([$brand["brand_id"]])[(int) $brand["brand_id"]] ?? null,
+    "alt_images" => brand_images(array_column($alternatives, "brand_id")),
 ]);

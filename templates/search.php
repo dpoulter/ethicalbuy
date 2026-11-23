@@ -126,7 +126,8 @@
                 ?>
               </td>
               <td><?php $rating = $result["rating"]; require(TEMPLATE_DIR . "/partials/rating_badge.php"); ?></td>
-              <td>
+              <td class="cell-with-thumb">
+                <?php $thumb_url = ($brand_images ?? [])[(int) ($result["brand_id"] ?? 0)] ?? null; $thumb_size = 56; require(TEMPLATE_DIR . "/partials/thumb.php"); ?>
                 <a href="brand.php?brand=<?= urlencode($result["brand"]) ?>">
                   <?= e($result["brand"]) ?>
                 </a>
@@ -180,7 +181,8 @@
                   require(TEMPLATE_DIR . "/partials/personal_score.php");
                 ?>
               </td>
-              <td>
+              <td class="cell-with-thumb">
+                <?php $thumb_url = $prod["image_url"] ?? null; $thumb_size = 56; require(TEMPLATE_DIR . "/partials/thumb.php"); ?>
                 <a href="product.php?code=<?= urlencode($prod["code"]) ?>">
                   <?= e($prod["name"] !== null && $prod["name"] !== "" ? $prod["name"] : "Product " . $prod["code"]) ?>
                 </a>

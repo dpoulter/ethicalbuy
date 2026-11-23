@@ -8,7 +8,8 @@
     </p>
     <p class="mb-0 small">
       Product data from <a href="https://world.openfoodfacts.org" rel="noopener noreferrer">Open Food Facts</a>,
-      available under the Open Database Licence (ODbL).
+      available under the Open Database Licence (ODbL). Product photos by Open Food Facts
+      contributors, CC BY-SA 4.0, loaded directly from Open Food Facts.
     </p>
   </div>
 </footer>
