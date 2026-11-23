@@ -1,13 +1,13 @@
-code	url	creator	product_name	brands	brands_tags	categories_tags	labels_tags	stores	countries_tags	nutriscore_grade	environmental_score_grade	energy_100g
-D001	https://world.openfoodfacts.org/product/D001	u	Alpha Oat Drink	Dump Alpha	xx:dump-alpha	en:beverages,en:plant-based-milks	en:vegetarian,en:organic,en:vegan	Tesco	en:france,en:united-kingdom	a	a-plus	200
-D002	https://world.openfoodfacts.org/product/D002	u	Alpha Soya Drink	Dump Alpha	en:dump-alpha	en:beverages			en:united-kingdom	c	f	210
-D003	https://world.openfoodfacts.org/product/D003	u	Alpha Almond Drink	Dump Alpha	fr:dump-alpha				en:united-kingdom	unknown	not-applicable	180
-D004	https://world.openfoodfacts.org/product/D004	u	Alpha French Only	Dump Alpha	xx:dump-alpha				en:france	a	a	100
-D005	https://world.openfoodfacts.org/product/D005	u	Alpha Beta Shared Bar	Dump Alpha, Dump Beta	xx:dump-alpha,xx:dump-beta				en:united-kingdom	b		300
+code	url	creator	product_name	brands	brands_tags	categories_tags	labels_tags	stores	countries_tags	nutriscore_grade	environmental_score_grade	energy_100g	image_small_url	unique_scans_n
+D001	https://world.openfoodfacts.org/product/D001	u	Alpha Oat Drink	Dump Alpha	xx:dump-alpha	en:beverages,en:plant-based-milks	en:vegetarian,en:organic,en:vegan	Tesco	en:france,en:united-kingdom	a	a-plus	200	https://images.openfoodfacts.org/images/products/D001/front_en.3.200.jpg	50
+D002	https://world.openfoodfacts.org/product/D002	u	Alpha Soya Drink	Dump Alpha	en:dump-alpha	en:beverages			en:united-kingdom	c	f	210	https://images.openfoodfacts.net/images/products/D002/front_en.1.200.jpg	200
+D003	https://world.openfoodfacts.org/product/D003	u	Alpha Almond Drink	Dump Alpha	fr:dump-alpha				en:united-kingdom	unknown	not-applicable	180	http://images.openfoodfacts.org/images/products/D003/front.200.jpg	abc
+D004	https://world.openfoodfacts.org/product/D004	u	Alpha French Only	Dump Alpha	xx:dump-alpha				en:france	a	a	100		
+D005	https://world.openfoodfacts.org/product/D005	u	Alpha Beta Shared Bar	Dump Alpha, Dump Beta	xx:dump-alpha,xx:dump-beta				en:united-kingdom	b		300	https://evil.example.com/images.openfoodfacts.org/x.jpg	9
 D999	broken line with too few fields
-D006	https://world.openfoodfacts.org/product/D006	u	Beta Crisps	Dump Beta	xx:dump-beta	en:snacks	en:fairtrade		en:united-kingdom	e	b	500
-D007	https://world.openfoodfacts.org/product/D007	u	Delta Kept Jam	Dump Delta	xx:dump-delta				en:united-kingdom	d		250
-	https://world.openfoodfacts.org/product/D001	u	Alpha Oat Drink	Dump Alpha	xx:dump-alpha	en:beverages,en:plant-based-milks	en:vegetarian,en:organic,en:vegan	Tesco	en:france,en:united-kingdom	a	a-plus	200
-D008	https://world.openfoodfacts.org/product/D008	u	Someone Else Soup	Someone Else	xx:someone-else				en:united-kingdom	a	a	90
-D009	https://world.openfoodfacts.org/product/D009	u	Near Miss Drink	Dump Alph	xx:dump-alph				en:united-kingdom	a	a	90
-D010	https://world.openfoodfacts.org/product/D010	u	Beta Empty Grades	Dump Beta	xx:dump-beta				en:united-kingdom			90
+D006	https://world.openfoodfacts.org/product/D006	u	Beta Crisps	Dump Beta	xx:dump-beta	en:snacks	en:fairtrade		en:united-kingdom	e	b	500	https://images.openfoodfacts.org/images/products/D006/front_en.7.200.jpg	
+D007	https://world.openfoodfacts.org/product/D007	u	Delta Kept Jam	Dump Delta	xx:dump-delta				en:united-kingdom	d		250		
+	https://world.openfoodfacts.org/product/D001	u	Alpha Oat Drink	Dump Alpha	xx:dump-alpha	en:beverages,en:plant-based-milks	en:vegetarian,en:organic,en:vegan	Tesco	en:france,en:united-kingdom	a	a-plus	200		
+D008	https://world.openfoodfacts.org/product/D008	u	Someone Else Soup	Someone Else	xx:someone-else				en:united-kingdom	a	a	90		
+D009	https://world.openfoodfacts.org/product/D009	u	Near Miss Drink	Dump Alph	xx:dump-alph				en:united-kingdom	a	a	90		
+D010	https://world.openfoodfacts.org/product/D010	u	Beta Empty Grades	Dump Beta	xx:dump-beta				en:united-kingdom			90		

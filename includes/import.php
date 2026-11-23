@@ -425,9 +425,48 @@ function map_off_product($product, $country = "en:united-kingdom")
             "category"   => $categories ? mb_substr((string) off_tag_to_name($categories[count($categories) - 1]), 0, 100) : null,
             "labels"     => $certifications,
             "source_url" => $product_url,
+            "image_url"  => off_image_url($product["image_small_url"] ?? null),
+            "scans"      => off_scans($product["unique_scans_n"] ?? null),
             "brand_keys" => off_product_brand_keys($product),
         ],
     ];
+}
+
+/**
+ * An Open Food Facts product image URL, kept only if it points at their
+ * image servers over HTTPS; anything else becomes null. We store the URL
+ * only: the visitor's browser loads the picture from Open Food Facts.
+ */
+function off_image_url($url)
+{
+    $url = trim((string) $url);
+
+    // no whitespace, quotes, angle brackets or backslashes: never valid in
+    // an image URL, and refused before it can reach an attribute
+    if ($url === "" || strlen($url) > 500 || preg_match('~[\s"\'<>\\\\]~', $url))
+    {
+        return null;
+    }
+
+    foreach (["https://images.openfoodfacts.org/", "https://images.openfoodfacts.net/"] as $prefix)
+    {
+        if (strncmp($url, $prefix, strlen($prefix)) === 0 && strlen($url) > strlen($prefix))
+        {
+            return $url;
+        }
+    }
+
+    return null;
+}
+
+/**
+ * Open Food Facts unique_scans_n as a non-negative int, or null.
+ */
+function off_scans($value)
+{
+    $value = trim((string) $value);
+
+    return ctype_digit($value) && strlen($value) < 10 ? (int) $value : null;
 }
 
 /**
@@ -781,13 +820,16 @@ function save_brand_products($brand_id, $brand_name, $mapped, $apply, &$notes, $
         }
 
         $ok = query(
-            "INSERT INTO products (brand_id, code, name, name_key, category, labels, source_url, retrieved_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            "INSERT INTO products (brand_id, code, name, name_key, category, labels, source_url,
+                                   image_url, scans, retrieved_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
              ON DUPLICATE KEY UPDATE name = VALUES(name), name_key = VALUES(name_key),
                  category = VALUES(category), labels = VALUES(labels),
-                 source_url = VALUES(source_url), retrieved_at = VALUES(retrieved_at)",
+                 source_url = VALUES(source_url), image_url = VALUES(image_url),
+                 scans = VALUES(scans), retrieved_at = VALUES(retrieved_at)",
             $brand_id, $p["code"], $p["name"], search_key($p["name"] ?? ""),
-            $p["category"], $p["labels"], $p["source_url"], $retrieved_at
+            $p["category"], $p["labels"], $p["source_url"],
+            $p["image_url"] ?? null, $p["scans"] ?? null, $retrieved_at
         ) !== false;
         if (!$ok) { break; }
 
@@ -949,7 +991,7 @@ function off_scores_from_products($mapped)
 const OFF_DUMP_COLUMNS = [
     "code", "url", "product_name", "brands", "brands_tags", "categories_tags",
     "labels_tags", "stores", "countries_tags", "nutriscore_grade",
-    "environmental_score_grade",
+    "environmental_score_grade", "image_small_url", "unique_scans_n",
 ];
 
 // lines longer than this are treated as malformed and skipped
@@ -1181,6 +1223,7 @@ function off_plan_brand($brand_id, $mapped)
 
     return [
         "products" => count($mapped),
+        "images"   => count(array_filter($mapped, function ($m) { return $m["product"]["image_url"] !== null; })),
         "added"    => count(array_diff($codes, $current)),
         "removed"  => count(array_diff($current, $codes)),
         "grades"   => $grades,

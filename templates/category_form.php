@@ -74,7 +74,26 @@
     link.textContent = b.brand;
     link.className = 'fw-bold';
 
-    head.appendChild(link);
+    // same box as partials/thumb.php: a neutral placeholder shows through
+    // if there is no photo or it fails to load
+    const thumb = document.createElement('span');
+    thumb.className = 'thumb' + (b.image ? '' : ' thumb--empty');
+    thumb.style.width = thumb.style.height = '56px';
+    if (b.image) {
+      const img = document.createElement('img');
+      img.src = b.image;
+      img.alt = '';
+      img.loading = 'lazy';
+      img.decoding = 'async';
+      img.width = img.height = 96;
+      img.referrerPolicy = 'no-referrer';
+      thumb.appendChild(img);
+    }
+    const name = document.createElement('span');
+    name.className = 'cell-with-thumb';
+    name.appendChild(thumb);
+    name.appendChild(link);
+    head.appendChild(name);
     head.appendChild(ratingBadge(b));
     li.appendChild(head);
 

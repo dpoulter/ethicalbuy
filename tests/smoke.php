@@ -1338,10 +1338,10 @@ check("apply: source_url is the product page", query("SELECT source_url FROM pro
 check("apply: brand with no dump rows keeps its products", $codesOf("Dump Gamma") === ["G001"]);
 check("apply: product missing from the dump deleted", $codesOf("Dump Delta") === ["D007"]);
 check("apply: rating and notes untouched", query("SELECT rating, notes FROM brands WHERE name = 'Dump Alpha'")[0] == ["rating" => "6.0", "notes" => "keep me"]);
-$before = query("SELECT p.code, p.brand_id, p.retrieved_at, ps.dimension, ps.score, ps.input FROM products p
+$before = query("SELECT p.code, p.brand_id, p.retrieved_at, p.image_url, p.scans, ps.dimension, ps.score, ps.input FROM products p
                   LEFT JOIN product_scores ps ON ps.product_id = p.id WHERE p.code LIKE 'D0%' ORDER BY p.code, ps.dimension");
 [$rc, $again] = runDumpImport(["--products", "--from-dump=$fixture", "--apply"]);
-$after = query("SELECT p.code, p.brand_id, p.retrieved_at, ps.dimension, ps.score, ps.input FROM products p
+$after = query("SELECT p.code, p.brand_id, p.retrieved_at, p.image_url, p.scans, ps.dimension, ps.score, ps.input FROM products p
                  LEFT JOIN product_scores ps ON ps.product_id = p.id WHERE p.code LIKE 'D0%' ORDER BY p.code, ps.dimension");
 check("second run: no data changes", $before === $after && $bsOf("Dump Alpha") == $alpha);
 [$rc, $dry2] = runDumpImport(["--products", "--from-dump=$fixture"]);
@@ -1349,6 +1349,57 @@ check("second run: reports no changes", preg_match('~updated\s+0~', $dry2) === 1
     && preg_match('~Dump Alpha\s+4 products \(\+0 -0\)~', $dry2) === 1);
 [$st, $html] = runPage("product.php", ["code" => "D001"]);
 check("product page shows the A+ grade", preg_match('~Grade: A\+\s*= 10 points~', $html) === 1);
+section("product photos (hotlinked from Open Food Facts)");
+check("image url: .org kept", off_image_url("https://images.openfoodfacts.org/images/products/1/front.200.jpg") !== null);
+check("image url: .net kept", off_image_url("https://images.openfoodfacts.net/images/products/1/front.200.jpg") !== null);
+foreach (["http://images.openfoodfacts.org/x.jpg", "https://images.openfoodfacts.org.evil.com/x.jpg",
+          "https://evil.example.com/images.openfoodfacts.org/x.jpg", "javascript:alert(1)", "",
+          "https://images.openfoodfacts.org/", "https://images.openfoodfacts.org/x\".jpg", null] as $bad) {
+    check("image url rejected: " . var_export($bad, true), off_image_url($bad) === null);
+}
+check("scans parsed", off_scans("200") === 200 && off_scans("abc") === null && off_scans("") === null && off_scans("-3") === null);
+check("dump dry run counts photos", preg_match('~Dump Alpha\s+4 products \(\+0 -0\), 2 with a photo~', $dry2) === 1);
+$img = function ($code) { return query("SELECT image_url, scans FROM products WHERE code = ?", $code)[0]; };
+check("apply: .org image and scans stored", $img("D001") == ["image_url" => "https://images.openfoodfacts.org/images/products/D001/front_en.3.200.jpg", "scans" => 50]);
+check("apply: .net image stored", $img("D002")["image_url"] === "https://images.openfoodfacts.net/images/products/D002/front_en.1.200.jpg");
+check("apply: http and foreign-host images stored as NULL", $img("D003") == ["image_url" => null, "scans" => null] && $img("D005")["image_url"] === null);
+$bi = brand_images([$did("Dump Alpha"), $did("Dump Beta"), $did("Dump Delta")]);
+check("brand photo: most scanned product with an image", $bi[$did("Dump Alpha")] === $img("D002")["image_url"]);
+check("brand photo: product with unknown scans still used", $bi[$did("Dump Beta")] === $img("D006")["image_url"]);
+check("brand photo: none when no product has one", !isset($bi[$did("Dump Delta")]));
+
+[$st, $html] = runPage("product.php", ["code" => "D001"]);
+structureChecks("product with photo", $html);
+check("product: img with the required attributes", preg_match('~<img src="https://images\.openfoodfacts\.org/images/products/D001/front_en\.3\.200\.jpg" alt="Alpha Oat Drink" loading="lazy" decoding="async"\s+width="96" height="96" referrerpolicy="no-referrer">~', $html) === 1);
+check("product: photo credit links to the OFF page", strpos($html, 'Photo:') !== false
+    && strpos($html, '<a href="https://world.openfoodfacts.org/product/D001" target="_blank" rel="noopener noreferrer">Open Food Facts contributors</a>,') !== false
+    && strpos($html, 'CC BY-SA 4.0') !== false);
+[$st, $html] = runPage("product.php", ["code" => "D003"]);
+check("product without photo: placeholder, no img, no credit", $st === 200 && strpos($html, 'thumb thumb--empty') !== false
+    && strpos($html, '<img ') === false && strpos($html, 'Photo:') === false);
+query("UPDATE products SET image_url = 'https://evil.example.com/x.jpg' WHERE code = 'D003'");
+[$st, $html] = runPage("product.php", ["code" => "D003"]);
+check("product: a bad URL in the database is never rendered", strpos($html, 'evil.example.com') === false && strpos($html, 'thumb--empty') !== false);
+query("UPDATE products SET image_url = NULL WHERE code = 'D003'");
+[$st, $html] = runPage("brand.php", ["brand" => "Dump Alpha"]);
+structureChecks("brand with photo", $html);
+check("brand: header shows its most scanned product's photo", strpos($html, 'src="' . $img("D002")["image_url"] . '"') !== false);
+check("brand: product table thumbnails", substr_count($html, 'loading="lazy"') >= 3);
+[$st, $html] = runPage("brand.php", ["brand" => "Dump Delta"]);
+$deltaHeader = substr($html, 0, strpos($html, 'Why this score'));
+check("brand without photo renders with placeholder", $st === 200 && strpos($deltaHeader, 'thumb thumb--empty') !== false
+    && strpos($deltaHeader, '<img ') === false);
+check("brand without photo: other brands keep theirs", strpos($html, 'src="' . $img("D002")["image_url"] . '"') !== false);
+[$st, $html] = runPage("search.php", ["q" => "Alpha"]);
+check("search: brand and product thumbnails", strpos($html, 'src="' . $img("D002")["image_url"] . '"') !== false
+    && strpos($html, 'src="' . $img("D001")["image_url"] . '"') !== false);
+[$st, $html] = runPage("index.php", []);
+check("home: brand photo passed to the list", strpos($html, str_replace("/", "\\/", $img("D002")["image_url"])) !== false
+    || strpos($html, $img("D002")["image_url"]) !== false);
+$o = renderTo("about.php", ["title" => "About"]);
+check("about: photo licence and privacy note", strpos($o, 'CC BY-SA 4.0') !== false && strpos($o, 'sees your IP address') !== false);
+check("footer: photo credit", strpos($o, 'Product photos by Open Food Facts') !== false);
+
 query("DELETE FROM brands WHERE name LIKE 'Dump %'");
 @unlink($gz);
 

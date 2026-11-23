@@ -17,6 +17,7 @@ if (!$rows)
 
 $weights = current_weights();
 $rows = attach_personal_scores($rows, $weights);
+$images = brand_images(array_column($rows, "brand_id"));
 
 // group brands by category
 $categories = [];
@@ -28,6 +29,8 @@ foreach ($rows as $row)
 
     $categories[$category][] = [
         "brand" => $row["brand"],
+        // hotlinked from Open Food Facts; only their image servers are allowed
+        "image" => $images[(int) $row["brand_id"]] ?? null,
         "type" => $row["type"],
         "notes" => $row["notes"],
         "owner" => $row["owner"],

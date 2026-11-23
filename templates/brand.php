@@ -14,8 +14,11 @@
 
 <div class="card mb-4 page-hero">
   <div class="card-body">
-    <div class="d-flex justify-content-between align-items-start flex-wrap gap-2">
-      <h3 class="card-title mb-0"><?= e($brand["brand"]) ?></h3>
+    <div class="d-flex justify-content-between align-items-start flex-wrap gap-3">
+      <div class="d-flex align-items-center gap-3 hero-with-photo">
+        <?php $thumb_url = $brand_image ?? null; require(TEMPLATE_DIR . "/partials/thumb.php"); ?>
+        <h3 class="card-title mb-0"><?= e($brand["brand"]) ?></h3>
+      </div>
       <div class="text-end score-hero">
         <div class="small text-muted mb-1">
           <?= $chosen ? "Your rating" : "Balanced rating" ?>
@@ -138,7 +141,8 @@
             <tbody>
               <?php foreach ($product_rows as $prod): ?>
                 <tr>
-                  <td>
+                  <td class="cell-with-thumb">
+                    <?php $thumb_url = $prod["image_url"] ?? null; $thumb_size = 56; require(TEMPLATE_DIR . "/partials/thumb.php"); ?>
                     <a href="product.php?code=<?= urlencode($prod["code"]) ?>">
                       <?= e($prod["name"] !== null && $prod["name"] !== "" ? $prod["name"] : "Product " . $prod["code"]) ?>
                     </a>
@@ -182,7 +186,8 @@
       <?php $alt_class = rating_class($alt["personal"]["score"]); ?>
       <li class="list-group-item<?= $alt_class === "" ? "" : " list-group-item-" . $alt_class ?>">
         <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
-          <div>
+          <div class="cell-with-thumb">
+            <?php $thumb_url = ($alt_images ?? [])[(int) ($alt["brand_id"] ?? 0)] ?? null; $thumb_size = 56; require(TEMPLATE_DIR . "/partials/thumb.php"); ?>
             <a href="brand.php?brand=<?= urlencode($alt["brand"]) ?>">
               <strong><?= e($alt["brand"]) ?></strong>
             </a>

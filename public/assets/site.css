@@ -590,6 +590,55 @@ details .list-group { margin-top: var(--eb-s3) !important; }
 .invalid-feedback { color: var(--eb-error); }
 .form-control.is-invalid { border-color: var(--eb-error); }
 
+/* --------------------------------------------------------- Product photos */
+
+/*
+ * Photos are hotlinked from Open Food Facts (partials/thumb.php). The box has
+ * a fixed size and a neutral placeholder background; the image sits on top
+ * with object-fit: contain, so a missing or broken image leaves a clean
+ * empty box and nothing on the page moves.
+ */
+.thumb {
+  position: relative;
+  display: inline-block;
+  flex: none;
+  overflow: hidden;
+  vertical-align: middle;
+  border-radius: var(--eb-radius-sm);
+  border: 1px solid var(--eb-border);
+  background:
+    linear-gradient(135deg, transparent 46%, var(--eb-tint-strong) 46%, var(--eb-tint-strong) 54%, transparent 54%),
+    var(--eb-tint);
+}
+.thumb img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  color: transparent;   /* never show alt text over the placeholder */
+}
+/* drawn only when the image fails to load: covers the browser's broken-image
+   icon with the same neutral placeholder */
+.thumb img::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(135deg, transparent 46%, var(--eb-tint-strong) 46%, var(--eb-tint-strong) 54%, transparent 54%),
+    var(--eb-tint);
+}
+.cell-with-thumb { display: flex; align-items: center; gap: var(--eb-s3); }
+.product-photo { display: flex; flex-direction: column; gap: var(--eb-s1); max-width: 160px; }
+.photo-credit { font-size: .75rem; color: var(--eb-muted); line-height: 1.3; }
+@media (max-width: 575.98px) {
+  .hero-with-photo { flex-wrap: wrap; }
+}
+@media print {
+  .thumb { display: none; }
+  .product-photo .photo-credit { display: none; }
+}
+
 /* ----------------------------------------------------------- 9. Notices, errors */
 
 .notice-panel {

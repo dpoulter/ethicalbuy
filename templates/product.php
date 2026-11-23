@@ -14,11 +14,28 @@
 
 <div class="card mb-4 page-hero">
   <div class="card-body">
-    <div class="d-flex justify-content-between align-items-start flex-wrap gap-2">
-      <div>
-        <h3 class="card-title mb-0"><?= e($product_name) ?></h3>
-        <div class="text-muted">
-          by <a href="brand.php?brand=<?= urlencode($product["brand"]) ?>"><?= e($product["brand"]) ?></a>
+    <div class="d-flex justify-content-between align-items-start flex-wrap gap-3">
+      <div class="d-flex align-items-start gap-3 hero-with-photo">
+        <figure class="product-photo mb-0">
+          <?php $thumb_url = $product["image_url"] ?? null; $thumb_alt = $product_name; $thumb_size = 160;
+                require(TEMPLATE_DIR . "/partials/thumb.php"); ?>
+          <?php if (is_product_image_url($product["image_url"] ?? null)): ?>
+            <figcaption class="photo-credit">
+              Photo:
+              <?php if (preg_match('~^https?://~i', $off_url)): ?>
+                <a href="<?= e($off_url) ?>" target="_blank" rel="noopener noreferrer">Open Food Facts contributors</a>,
+              <?php else: ?>
+                Open Food Facts contributors,
+              <?php endif ?>
+              CC BY-SA 4.0
+            </figcaption>
+          <?php endif ?>
+        </figure>
+        <div>
+          <h3 class="card-title mb-0"><?= e($product_name) ?></h3>
+          <div class="text-muted">
+            by <a href="brand.php?brand=<?= urlencode($product["brand"]) ?>"><?= e($product["brand"]) ?></a>
+          </div>
         </div>
       </div>
       <div class="text-end score-hero">
