@@ -1377,10 +1377,21 @@ check("product: photo credit links to the OFF page", strpos($html, 'Photo:') !==
 [$st, $html] = runPage("product.php", ["code" => "D003"]);
 check("product without photo: placeholder, no img, no credit", $st === 200 && strpos($html, 'thumb thumb--empty') !== false
     && strpos($html, '<img ') === false && strpos($html, 'Photo:') === false);
-query("UPDATE products SET image_url = 'https://evil.example.com/x.jpg' WHERE code = 'D003'");
+// runs one statement as the importer's database user (the site's user cannot write products)
+function asImporter($sql) {
+    $env = array_merge(getenv(), ["DB_USER" => getenv("IMPORT_DB_USER") ?: "ethicalbuy_import",
+        "DB_PASSWORD" => getenv("IMPORT_DB_PASSWORD") ?: "ethicalbuy_import_dev", "T_SQL" => $sql]);
+    $code = 'require ' . var_export(__DIR__ . "/../includes/config.php", true) . '; echo query(getenv("T_SQL")) === false ? "fail" : "ok";';
+    $proc = proc_open([PHP_BINARY, "-r", $code], [1 => ["pipe", "w"], 2 => ["pipe", "w"]], $pipes, null, $env);
+    $out = stream_get_contents($pipes[1]);
+    proc_close($proc);
+    return $out === "ok";
+}
+check("test setup: bad URL planted", asImporter("UPDATE products SET image_url = 'https://evil.example.com/x.jpg' WHERE code = 'D003'")
+    && query("SELECT image_url FROM products WHERE code = 'D003'")[0]["image_url"] === "https://evil.example.com/x.jpg");
 [$st, $html] = runPage("product.php", ["code" => "D003"]);
 check("product: a bad URL in the database is never rendered", strpos($html, 'evil.example.com') === false && strpos($html, 'thumb--empty') !== false);
-query("UPDATE products SET image_url = NULL WHERE code = 'D003'");
+asImporter("UPDATE products SET image_url = NULL WHERE code = 'D003'");
 [$st, $html] = runPage("brand.php", ["brand" => "Dump Alpha"]);
 structureChecks("brand with photo", $html);
 check("brand: header shows its most scanned product's photo", strpos($html, 'src="' . $img("D002")["image_url"] . '"') !== false);
