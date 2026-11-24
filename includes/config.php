@@ -13,6 +13,7 @@ require_once(__DIR__ . "/products.php");
 
 require_once(__DIR__ . "/errors.php");
 require_once(__DIR__ . "/ratelimit.php");
+require_once(__DIR__ . "/contact.php");
 
 // never render errors to visitors in production; always log them
 install_error_handling();

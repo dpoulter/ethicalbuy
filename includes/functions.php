@@ -130,6 +130,13 @@ function query(/* $sql [, ... ] */)
             $GLOBALS["ETHICALBUY_DB_DOWN"] = true;
             return false;
         }
+
+        // no single web request may run an unbounded query. The importers
+        // run from the command line and are exempt.
+        if (PHP_SAPI !== "cli")
+        {
+            set_statement_timeout($handle);
+        }
     }
 
     if ($handle === null)
@@ -147,6 +154,29 @@ function query(/* $sql [, ... ] */)
     {
         error_log("Query failed: " . $e->getMessage() . " -- SQL: " . $sql);
         return false;
+    }
+}
+
+/**
+ * Caps how long any one statement may run for this connection, in seconds
+ * (DB_STATEMENT_TIMEOUT, default 5). MariaDB and MySQL spell this
+ * differently; whichever the server does not know is ignored.
+ */
+function set_statement_timeout(PDO $handle)
+{
+    $seconds = max(1, (int) env("DB_STATEMENT_TIMEOUT", "5"));
+
+    foreach (["SET SESSION max_statement_time = " . $seconds,
+              "SET SESSION max_execution_time = " . ($seconds * 1000)] as $sql)
+    {
+        try
+        {
+            $handle->exec($sql);
+        }
+        catch (PDOException $e)
+        {
+            // not this server's variable
+        }
     }
 }
 
@@ -424,6 +454,40 @@ function require_admin()
     show_error_page(401);
 }
 
+// longest search term accepted; anything longer is cut to this
+const SEARCH_TERM_MAX = 100;
+
+// longest brand name the admin form accepts
+const BRAND_NAME_MAX = 150;
+
+// highest page number accepted from a query string
+const PAGE_MAX = 500;
+
+/**
+ * A page number from the query string: 1 to PAGE_MAX, anything else 1 or
+ * PAGE_MAX.
+ */
+function page_number($raw)
+{
+    $raw = trim((string) $raw);
+
+    if (!ctype_digit($raw) || strlen($raw) > 6)
+    {
+        return strlen($raw) > 6 && ctype_digit($raw) ? PAGE_MAX : 1;
+    }
+
+    return max(1, min(PAGE_MAX, (int) $raw));
+}
+
+/**
+ * True for something that could be a product code: an Open Food Facts code
+ * is a barcode, occasionally with letters, dots, dashes or underscores.
+ */
+function is_product_code($code)
+{
+    return is_string($code) && preg_match('/^[0-9A-Za-z._-]{1,100}$/', $code) === 1;
+}
+
 /**
  * Reads a string from $_GET/$_POST, defending against array-valued input
  * such as ?field[]=x, which would otherwise raise a conversion notice.
@@ -464,6 +528,17 @@ function csrf_valid($token)
     return !empty($_SESSION["csrf_token"])
         && is_string($token)
         && hash_equals($_SESSION["csrf_token"], $token);
+}
+
+/**
+ * How long contact messages and log rows are kept, in days. Shown on the
+ * privacy page and used by bin/purge-messages.php, so the two cannot drift.
+ */
+function message_retention_days()
+{
+    $days = env("MESSAGE_RETENTION_DAYS", "180");
+
+    return ctype_digit($days) && (int) $days > 0 ? (int) $days : 180;
 }
 
 /**

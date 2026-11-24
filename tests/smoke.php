@@ -324,6 +324,54 @@ $sentOut = renderTo("contact.php", [
     "errors" => [], "sent" => true,
 ]);
 check("contact: success message on sent", strpos($sentOut, 'has been sent') !== false);
+$out = renderTo("contact.php", [
+    "title" => "Contact", "values" => ["name" => "", "email" => "", "message" => "", "about" => "brand", "item" => $evil . '" onfocus="x'],
+    "errors" => [], "sent" => false, "stamp" => "1.abc",
+]);
+structureChecks("contact report", $out);
+check("contact: reported item escaped in text and hidden field", strpos($out, '&lt;script&gt;') !== false
+    && strpos($out, '" onfocus="x') === false);
+check("contact: honeypot present and hidden by class", strpos($out, 'class="contact-trap" aria-hidden="true"') !== false
+    && strpos($out, 'name="website" tabindex="-1"') !== false);
+check("contact: no third-party script without Turnstile", strpos($out, 'challenges.cloudflare.com') === false);
+$out = renderTo("contact.php", ["title" => "Contact", "values" => ["name" => "", "email" => "", "message" => ""],
+    "errors" => [], "sent" => false, "turnstile_site_key" => "1x00000000000000000000AA"]);
+check("contact: Turnstile widget and script when the key is set", strpos($out, 'data-sitekey="1x00000000000000000000AA"') !== false
+    && strpos($out, '<script src="https://challenges.cloudflare.com/turnstile/v0/api.js"') !== false);
+
+section("contact validation");
+$okc = ["name" => "Sam", "email" => "sam@example.com", "message" => "Hello\r\nthere"];
+[$errs, $clean] = validate_contact($okc);
+check("valid message passes", $errs === []);
+check("line endings normalised", $clean["message"] === "Hello\nthere");
+[$errs] = validate_contact(array_merge($okc, ["name" => "Sam\r\nBcc: victim@example.com"]));
+check("header injection in name rejected", isset($errs["name"]));
+[$errs] = validate_contact(array_merge($okc, ["email" => "sam@example.com\r\nBcc: victim@example.com"]));
+check("header injection in email rejected", isset($errs["email"]));
+[$errs] = validate_contact(array_merge($okc, ["email" => "sam@example.com%0ABcc:x@example.com"]));
+check("encoded injection in email rejected", isset($errs["email"]));
+[$errs] = validate_contact(array_merge($okc, ["name" => str_repeat("n", 101)]));
+check("oversize name rejected", isset($errs["name"]));
+[$errs] = validate_contact(array_merge($okc, ["email" => str_repeat("e", 250) . "@example.com"]));
+check("oversize email rejected", isset($errs["email"]));
+[$errs] = validate_contact(array_merge($okc, ["message" => str_repeat("m", 5001)]));
+check("oversize message rejected", isset($errs["message"]));
+[$errs] = validate_contact(array_merge($okc, ["message" => "bad \x00 byte"]));
+check("control characters in message rejected", isset($errs["message"]));
+[$errs] = validate_contact(array_merge($okc, ["message" => "bad \xC3\x28 utf8"]));
+check("invalid UTF-8 rejected", isset($errs["message"]));
+[$errs, $clean] = validate_contact(array_merge($okc, ["about" => "brand", "item" => "Valley Fresh"]));
+check("problem report keeps its item", $clean["about"] === "brand" && contact_stored_message($clean) === "Problem report about brand: Valley Fresh\n\nHello\nthere");
+[$errs, $clean] = validate_contact(array_merge($okc, ["about" => "owner'; DROP", "item" => "x"]));
+check("unknown report type dropped", $clean["about"] === "" && contact_stored_message($clean) === "Hello\nthere");
+check("item with a newline dropped", contact_item("A\nB") === "");
+check("over-long item dropped", contact_item(str_repeat("i", 151)) === "");
+$stamp = contact_form_stamp(time() - 10);
+check("form stamp age read back", contact_form_age($stamp) === 10);
+check("forged form stamp rejected", contact_form_age((time() - 10) . "." . str_repeat("0", 64)) === null);
+check("garbage form stamp rejected", contact_form_age("soon") === null);
+check("day-old form stamp rejected", contact_form_age(contact_form_stamp(time() - 90000)) === null);
+check("Turnstile off by default", !turnstile_enabled());
 
 section("about.php template");
 $out = renderTo("about.php", ["title" => "About"]);
@@ -1577,6 +1625,175 @@ $logText = implode("\n", array_column($logged, "message_text"));
 check("failed logins are logged with a truncated address", strpos($logText, "failed login from 198.51.") !== false
     && preg_match('~198\.51\.\d+\.0/24~', $logText) === 1);
 check("log never holds the username or password tried", strpos($logText, "wrong guess") === false && strpos($logText, "dale") === false);
+
+section("client_ip: CF-Connecting-IP only from loopback with TRUST_PROXY");
+$saved = $_SERVER;
+$_SERVER["HTTP_CF_CONNECTING_IP"] = "203.0.113.50";
+$_SERVER["REMOTE_ADDR"] = "127.0.0.1";
+putenv("TRUST_PROXY=1");
+check("honoured from loopback with TRUST_PROXY=1", client_ip() === "203.0.113.50");
+$_SERVER["REMOTE_ADDR"] = "::1";
+check("honoured from IPv6 loopback", client_ip() === "203.0.113.50");
+$_SERVER["REMOTE_ADDR"] = "198.51.100.7";
+check("ignored from a remote peer", client_ip() === "198.51.100.7");
+$_SERVER["REMOTE_ADDR"] = "127.0.0.1";
+putenv("TRUST_PROXY=0");
+check("ignored with TRUST_PROXY=0", client_ip() === "127.0.0.1");
+putenv("TRUST_PROXY=1");
+$_SERVER["HTTP_CF_CONNECTING_IP"] = "not-an-ip, 1.2.3.4";
+check("garbage header falls back to the peer", client_ip() === "127.0.0.1");
+$_SERVER["HTTP_CF_CONNECTING_IP"] = "2001:db8:abcd:12::1";
+check("IPv6 visitor accepted", client_ip() === "2001:db8:abcd:12::1");
+putenv("TRUST_PROXY=0");
+$_SERVER = $saved;
+check("truncated IPv4 is the /24", truncated_ip("203.0.113.77") === "203.0.113.0/24");
+check("truncated IPv6 is the /48", truncated_ip("2001:db8:abcd:12::1") === "2001:db8:abcd::/48");
+check("truncated garbage", truncated_ip("nope") === "unknown");
+check("page_number clamps", page_number("0") === 1 && page_number("7") === 7 && page_number("999999") === PAGE_MAX
+    && page_number("99999999999999999999") === PAGE_MAX && page_number("-3") === 1 && page_number("2abc") === 1);
+check("product codes", is_product_code("5000159484695") && !is_product_code("1' OR 1=1") && !is_product_code(str_repeat("1", 101)));
+
+section("HTTP: contact form abuse resistance");
+$cp = http_server(["TRUST_PROXY" => "1", "CONTACT_MIN_SECONDS" => "1"]);
+// fetch the form as a given visitor: returns [cookie, token, stamp]
+$openForm = function ($port, $ip, $query = "") {
+    [$st, $hs, $body] = http_req($port, "/contact.php$query", ["headers" => ["CF-Connecting-IP" => $ip]]);
+    $cookie = "";
+    foreach ($hs["set-cookie"] ?? [] as $c) { if (stripos($c, "PHPSESSID=") === 0) { $cookie = explode(";", $c)[0]; } }
+    preg_match('~name="csrf_token" value="([0-9a-f]+)"~', $body, $t);
+    preg_match('~name="form_stamp" value="([^"]+)"~', $body, $f);
+    return [$cookie, $t[1] ?? "", $f[1] ?? "", $body, $hs];
+};
+$post = function ($port, $ip, $cookie, $fields) {
+    return http_req($port, "/contact.php", ["method" => "POST", "body" => $fields,
+        "headers" => ["CF-Connecting-IP" => $ip, "Cookie" => $cookie]]);
+};
+$count = function () { return (int) (importerRows("SELECT COUNT(*) AS n FROM contact_messages")[0]["n"] ?? -1); };
+$fields = ["name" => "Sam Tester", "email" => "sam@example.com", "message" => "The owner of Valley Fresh changed last year."];
+
+$ip = fake_ip();
+[$cookie, $token, $stamp, $body, $hs] = $openForm($cp, $ip);
+check("form served with a token and a stamp", $token !== "" && $stamp !== "" && $cookie !== "");
+check("form page is no-store", hdr($hs, "Cache-Control") === "no-store");
+sleep(1);
+$before = $count();
+[$st, $hs, $body] = $post($cp, $ip, $cookie, $fields + ["form_stamp" => $stamp]);
+check("missing CSRF token rejected", $st === 200 && strpos($body, "session expired") !== false && $count() === $before);
+[$st, $hs, $body] = $post($cp, $ip, $cookie, $fields + ["form_stamp" => $stamp, "csrf_token" => str_repeat("a", 64)]);
+check("wrong CSRF token rejected", strpos($body, "session expired") !== false && $count() === $before);
+[$st, $hs, $body] = $post($cp, $ip, $cookie, $fields + ["form_stamp" => $stamp, "csrf_token" => $token, "website" => "http://spam.example"]);
+check("filled honeypot looks sent but stores nothing", $st === 302 && strpos((string) hdr($hs, "Location"), "sent=1") !== false && $count() === $before);
+
+$ip = fake_ip();
+[$cookie, $token, $stamp] = $openForm($cp, $ip);
+[$st, $hs, $body] = $post($cp, $ip, $cookie, $fields + ["form_stamp" => $stamp, "csrf_token" => $token]);
+check("instant submission (under the minimum time) stores nothing", $st === 302 && $count() === $before);
+[$st, $hs, $body] = $post($cp, $ip, $cookie, $fields + ["form_stamp" => "1700000000." . str_repeat("0", 64), "csrf_token" => $token]);
+check("forged stamp stores nothing", $st === 302 && $count() === $before);
+
+$ip = fake_ip();
+[$cookie, $token, $stamp] = $openForm($cp, $ip);
+sleep(1);
+[$st, $hs, $body] = $post($cp, $ip, $cookie, array_merge($fields, ["message" => str_repeat("x", 5001), "form_stamp" => $stamp, "csrf_token" => $token]));
+check("oversize message rejected", $st === 200 && strpos($body, "under 5000 characters") !== false && $count() === $before);
+[$st, $hs, $body] = $post($cp, $ip, $cookie, array_merge($fields, ["email" => "sam@example.com\r\nBcc: victim@example.com", "form_stamp" => $stamp, "csrf_token" => $token]));
+check("header injection rejected", $st === 200 && strpos($body, "valid email address") !== false && $count() === $before);
+[$st, $hs, $body] = $post($cp, $ip, $cookie, array_merge($fields, ["about" => "brand", "item" => "Valley Fresh", "form_stamp" => $stamp, "csrf_token" => $token]));
+check("good message saved, then redirected", $st === 302 && $count() === $before + 1);
+$saved = importerRows("SELECT message FROM contact_messages ORDER BY id DESC LIMIT 1")[0]["message"] ?? "";
+check("problem report stored with what it is about", strpos($saved, "Problem report about brand: Valley Fresh") === 0);
+$logged = importerRows("SELECT message_text FROM message_log WHERE module = 'contact' ORDER BY id DESC LIMIT 1")[0]["message_text"] ?? "";
+check("contact log holds the /24, not the address", $logged === "message received from " . truncated_ip($ip) && strpos($logged, $ip) === false);
+[$st, $hs, $body] = http_req($cp, "/contact.php?about=brand&item=" . rawurlencode('<b>Valley</b>" autofocus'));
+check("report link pre-fills, escaped", strpos($body, '&lt;b&gt;Valley&lt;/b&gt;&quot; autofocus') !== false && strpos($body, '<b>Valley') === false);
+
+// rate limit: three an hour
+$ip = fake_ip();
+$codes = [];
+for ($i = 0; $i < 4; $i++) {
+    [$cookie, $token, $stamp] = $openForm($cp, $ip);
+    if ($i === 0) { sleep(1); }
+    [$codes[], $hs, $body] = $post($cp, $ip, $cookie, $fields + ["form_stamp" => $stamp, "csrf_token" => $token]);
+}
+check("three messages an hour, then 429", $codes === [302, 302, 302, 429]);
+check("contact 429 is calm and has Retry-After", strpos($body, "Please wait a while") !== false && (int) hdr($hs, "Retry-After") > 0);
+[$st] = $post($cp, fake_ip(), $cookie, $fields + ["form_stamp" => $stamp, "csrf_token" => $token]);
+check("another visitor is not limited", $st !== 429);
+check("test setup: counters cleared", asImporter("DELETE FROM rate_limits WHERE bucket = 'contact'"));
+
+section("HTTP: browse rate limits");
+$bp = http_server(["TRUST_PROXY" => "1", "RATE_BROWSE_PER_MINUTE" => "5"]);
+foreach (["/search.php?q=milk", "/", "/brand.php?brand=Valley+Fresh", "/product.php?code=9001"] as $p) {
+    $ip = fake_ip();
+    $codes = [];
+    for ($i = 0; $i < 6; $i++) {
+        [$codes[], $hs] = http_req($bp, $p, ["headers" => ["CF-Connecting-IP" => $ip]]);
+    }
+    check("$p: five allowed, the sixth is 429", array_slice($codes, 0, 5) === array_fill(0, 5, $codes[0]) && $codes[0] !== 429 && $codes[5] === 429);
+    check("$p: 429 carries Retry-After", (int) hdr($hs, "Retry-After") >= 1 && (int) hdr($hs, "Retry-After") <= 60);
+}
+[$st] = http_req($bp, "/about.php", ["headers" => ["CF-Connecting-IP" => $ip]]);
+check("static pages are not browse-limited", $st === 200);
+[$st] = http_req($bp, "/search.php?q=milk", ["headers" => ["CF-Connecting-IP" => fake_ip()]]);
+check("normal use from another visitor is fine", $st === 200);
+$spoof = http_server(["TRUST_PROXY" => "0", "RATE_BROWSE_PER_MINUTE" => "3"]);
+$codes = [];
+for ($i = 0; $i < 4; $i++) {
+    [$codes[]] = http_req($spoof, "/search.php?q=x", ["headers" => ["CF-Connecting-IP" => fake_ip()]]);
+}
+check("with TRUST_PROXY=0 a rotating CF-Connecting-IP does not dodge the limit", $codes[3] === 429);
+check("test setup: counters cleared", asImporter("DELETE FROM rate_limits"));
+
+section("HTTP: input caps");
+[$st, $hs, $body] = http_req($port, "/search.php?q=" . str_repeat("a", 300));
+check("long search query is cut to 100 characters", $st === 200 && strpos($body, str_repeat("a", 101)) === false && strpos($body, str_repeat("a", 100)) !== false);
+[$st] = http_req($port, "/search.php?q=milk&page=99999999999");
+check("absurd page number is harmless", $st === 200);
+[$st] = http_req($port, "/product.php?code=" . rawurlencode("1' OR '1'='1"));
+check("malformed product code -> 404", $st === 404);
+[$st] = http_req($port, "/brand.php?brand=" . str_repeat("b", 151));
+check("over-long brand name -> 404", $st === 404);
+[$st] = http_req($port, "/brand.php?brand=" . rawurlencode("Valley\nFresh"));
+check("brand name with a control character -> 404", $st === 404);
+[$st] = http_req($port, "/search.php?q[]=x&page[]=2");
+check("array-valued parameters are harmless", $st === 200);
+
+section("bin/purge-messages.php");
+$purge = function ($args = [], $env = []) {
+    $env = array_merge(getenv(), ["DB_USER" => getenv("IMPORT_DB_USER") ?: "ethicalbuy_import",
+        "DB_PASSWORD" => getenv("IMPORT_DB_PASSWORD") ?: "ethicalbuy_import_dev"], $env);
+    $proc = proc_open(array_merge([PHP_BINARY, __DIR__ . "/../bin/purge-messages.php"], $args),
+        [1 => ["pipe", "w"], 2 => ["pipe", "w"]], $pipes, null, $env);
+    $out = stream_get_contents($pipes[1]) . stream_get_contents($pipes[2]);
+    return [proc_close($proc), $out];
+};
+$marker = "purge-test-" . bin2hex(random_bytes(4));
+query("INSERT INTO contact_messages (name, email, message, created_at) VALUES (?, 'a@example.com', 'old', NOW() - INTERVAL 200 DAY)", $marker);
+query("INSERT INTO contact_messages (name, email, message, created_at) VALUES (?, 'a@example.com', 'edge', NOW() - INTERVAL 179 DAY)", $marker);
+query("INSERT INTO contact_messages (name, email, message) VALUES (?, 'a@example.com', 'new')", $marker);
+query("INSERT INTO message_log (module, message_text, created_at) VALUES ('purge-test', ?, NOW() - INTERVAL 400 DAY)", $marker);
+query("INSERT INTO message_log (module, message_text) VALUES ('purge-test', ?)", $marker);
+$mine = function () use ($marker) {
+    return array_column(importerRows("SELECT message FROM contact_messages WHERE name = ? ORDER BY id", $marker) ?: [], "message");
+};
+$logs = function () use ($marker) {
+    return count(importerRows("SELECT id FROM message_log WHERE message_text = ?", $marker) ?: []);
+};
+[$rc, $out] = $purge();
+check("dry run: exit 0 and lists what it would delete", $rc === 0 && strpos($out, "Dry run") !== false
+    && preg_match('~contact_messages: [1-9]\d* row~', $out) === 1 && strpos($out, "Nothing deleted") !== false);
+check("dry run deletes nothing", $mine() === ["old", "edge", "new"] && $logs() === 2);
+check("dry run never prints message contents", strpos($out, $marker) === false);
+[$rc, $out] = $purge(["--apply"]);
+check("--apply: exit 0", $rc === 0 && strpos($out, "deleted") !== false);
+check("--apply deletes only messages older than 180 days", $mine() === ["edge", "new"]);
+check("--apply deletes only old log rows", $logs() === 1);
+[$rc, $out] = $purge(["--apply"], ["MESSAGE_RETENTION_DAYS" => "30"]);
+check("MESSAGE_RETENTION_DAYS is honoured", $mine() === ["new"] && strpos($out, "30 days") !== false);
+[$rc, $out] = $purge(["--apply"], ["DB_USER" => "ethicalbuy", "DB_PASSWORD" => getenv("DB_PASSWORD")]);
+check("the site's own account cannot purge", $rc === 1 && $mine() === ["new"]);
+asImporter("DELETE FROM contact_messages WHERE name = '$marker'");
+asImporter("DELETE FROM message_log WHERE message_text = '$marker'");
 
 section("every POST form carries a CSRF token");
 foreach (array_merge(glob(__DIR__ . "/../templates/*.php"), glob(__DIR__ . "/../templates/admin/*.php")) as $tpl) {

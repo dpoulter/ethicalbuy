@@ -2,11 +2,20 @@
 
 require_once(__DIR__ . "/../includes/config.php");
 
+enforce_browse_limit();
+
 $code = input_string($_GET, "code");
 
 if ($code === "")
 {
+    http_response_code(404);
     apologize("No product was specified.");
+}
+
+// barcodes and Open Food Facts codes only; anything else is not a product
+if (!is_product_code($code))
+{
+    show_error_page(404);
 }
 
 $product = get_product($code);

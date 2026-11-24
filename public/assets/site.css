@@ -673,3 +673,12 @@ details .list-group { margin-top: var(--eb-s3) !important; }
   details > summary::before { display: none; }
   a { color: inherit; text-decoration: none; }
 }
+
+/* contact form honeypot: off screen, not display:none, so simple bots still fill it */
+.contact-trap {
+  position: absolute;
+  left: -10000px;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+}

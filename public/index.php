@@ -11,6 +11,8 @@ if ($route !== "home")
     show_error_page(404);
 }
 
+enforce_browse_limit();
+
 $rows = get_categories();
 
 // handle failure before rendering anything, so apologize() owns the whole page
