@@ -22,6 +22,19 @@ if ($file !== false && strpos($file, $public) === 0)
     }
 }
 
+// test-only failure hooks, used to prove errors never leak detail
+if ($path === "/__throw" || $path === "/__fatal")
+{
+    $_SERVER["SCRIPT_NAME"] = $path;
+    require $public . "/../includes/config.php";
+    echo "partial output that must not survive";
+    if ($path === "/__throw")
+    {
+        throw new RuntimeException("SECRET-DETAIL " . __FILE__ . " DB_PASSWORD=" . getenv("DB_PASSWORD"));
+    }
+    no_such_function_secret_detail();
+}
+
 $_SERVER["SCRIPT_NAME"] = "/index.php";
 $_SERVER["PHP_SELF"] = "/index.php";
 $_SERVER["SCRIPT_FILENAME"] = $public . "/index.php";

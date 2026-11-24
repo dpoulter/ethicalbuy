@@ -1973,6 +1973,23 @@ check("report_problem_url encodes", report_problem_url("brand", 'A&B "x"') === "
 check("newest_date picks the newest", newest_date(null, "2026-01-02 00:00:00", "2026-03-01", "") === "2026-03-01");
 check("long_date", long_date("2026-11-24 10:00:00") === "24 November 2026");
 
+section("HTTP: no error detail ever reaches a visitor");
+$dbg = http_server(["APP_DEBUG" => "1"]);
+[$st, $hs, $body] = http_req($dbg, "/__throw", ["headers" => ["Host" => "localhost:8000"]]);
+check("test hook works: APP_DEBUG=1 on localhost shows the detail", strpos($body, "SECRET-DETAIL") !== false);
+foreach (["/__throw", "/__fatal"] as $p) {
+    foreach (["ethicalbuy.net", "ethicalbuy.contelo.ai"] as $host) {
+        [$st, $hs, $body] = http_req($dbg, $p, ["headers" => ["Host" => $host]]);
+        check("$p with APP_DEBUG=1 on $host -> plain 500", $st === 500 && strpos($body, "Something went wrong") !== false);
+        check("$p on $host: no message, path, secret or partial page", strpos($body, "SECRET") === false
+            && strpos($body, "secret_detail") === false && strpos($body, __DIR__) === false
+            && strpos($body, dirname(__DIR__)) === false && strpos($body, "partial output") === false
+            && strpos($body, (string) getenv("DB_PASSWORD")) === false);
+    }
+}
+[$st, $hs, $body] = http_req($port, "/__throw", ["headers" => ["Host" => "localhost"]]);
+check("APP_DEBUG=0 on localhost -> plain 500 too", $st === 500 && strpos($body, "SECRET") === false && strpos($body, "partial output") === false);
+
 section("every POST form carries a CSRF token");
 foreach (array_merge(glob(__DIR__ . "/../templates/*.php"), glob(__DIR__ . "/../templates/admin/*.php")) as $tpl) {
     $src = file_get_contents($tpl);
