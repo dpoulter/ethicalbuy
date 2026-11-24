@@ -31,8 +31,20 @@
       <dt class="col-sm-3">Category</dt>
       <dd class="col-sm-9"><?= e($brand["category"] ?? "Uncategorised") ?></dd>
 
-      <dt class="col-sm-3">Type</dt>
-      <dd class="col-sm-9"><?= e($brand["type"]) ?></dd>
+      <?php $ownership_category = ownership_category_for_type($brand["type"]); ?>
+      <dt class="col-sm-3">Recorded type</dt>
+      <dd class="col-sm-9">
+        <?= ($brand["type"] ?? "") === "" ? "Not recorded" : e($brand["type"]) ?>
+        <div class="small text-muted">
+          <?php if ($ownership_category !== null): ?>
+            Counted as <?= e($ownership_category["label"]) ?> for the ownership score.
+          <?php elseif (($brand["type"] ?? "") !== ""): ?>
+            Not one of our <a href="/about.php#how-scores-work">ownership categories</a>, so ownership is not scored.
+          <?php endif ?>
+          Recorded by hand from public information and not independently verified.
+          <a href="<?= e(report_problem_url("brand", $brand["brand"])) ?>">Report a problem</a>
+        </div>
+      </dd>
 
       <dt class="col-sm-3">Owner</dt>
       <dd class="col-sm-9">
@@ -94,6 +106,16 @@
         information licensed under the Open Government Licence v3.0.
       </p>
     <?php endif ?>
+
+    <p class="small text-muted mb-0 mt-2 data-freshness">
+      <?php if (!empty($last_updated)): ?>
+        Data last updated <?= e(long_date($last_updated)) ?>.
+      <?php else: ?>
+        We have no dated source for this brand yet.
+      <?php endif ?>
+      <a href="<?= e(report_problem_url("brand", $brand["brand"])) ?>">Report a problem with this brand</a>
+      &middot; <a href="/sources.php">Data sources</a>
+    </p>
   </div>
 </div>
 

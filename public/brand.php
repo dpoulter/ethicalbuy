@@ -101,6 +101,7 @@ render("brand.php", [
     "product_page" => $product_page,
     "product_pages" => $product_pages,
     "product_filter" => $product_filter,
+    "last_updated" => newest_date($brand["retrieved_at"] ?? null, brand_last_updated($brand["brand_id"])),
     "brand_image" => brand_images([$brand["brand_id"]])[(int) $brand["brand_id"]] ?? null,
     "alt_images" => brand_images(array_column($alternatives, "brand_id")),
 ]);

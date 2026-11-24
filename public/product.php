@@ -47,6 +47,7 @@ render("product.php", [
     "description" => $product_title . " by " . $product["brand"]
         . ". See how it scores on environment, nutrition, animal welfare and who owns the brand.",
     "og_image" => $product["image_url"] ?? null,
+    "last_updated" => newest_date($product["product_retrieved_at"] ?? null, $product["retrieved_at"] ?? null),
     "title" => $product["name"] !== null && $product["name"] !== "" ? $product["name"] : "Product " . $product["code"],
     "product" => $product,
     "personal" => personal_score($values, $weights),

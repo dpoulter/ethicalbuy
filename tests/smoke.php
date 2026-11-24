@@ -989,6 +989,8 @@ function runPage($script, $get, $cookie = []) {
 [$st, $html] = runPage("product.php", ["code" => "9001"]);
 check("product: renders", $st === 200 && strpos($html, '<h3 class="card-title mb-0">Oat Drink</h3>') !== false);
 structureChecks("product page", $html);
+check("product: data last updated and report link", strpos($html, "Data last updated") !== false
+    && strpos($html, 'href="/contact.php?about=product&amp;item=Oat%20Drink%20%289001%29"') !== false);
 check("product: links up to brand", strpos($html, 'href="brand.php?brand=Prodco"') !== false);
 check("product: own dimensions have single working", substr_count($html, 'derivation-single') === 3);
 check("product: nutrition grade and points", preg_match('~Grade: B\s*= 8 points~', $html) === 1);
@@ -1462,7 +1464,12 @@ check("search: brand and product thumbnails", strpos($html, 'src="' . $img("D002
 check("home: brand photo passed to the list", strpos($html, str_replace("/", "\\/", $img("D002")["image_url"])) !== false
     || strpos($html, $img("D002")["image_url"]) !== false);
 $o = renderTo("about.php", ["title" => "About"]);
-check("about: photo licence and privacy note", strpos($o, 'CC BY-SA 4.0') !== false && strpos($o, 'sees your IP address') !== false);
+check("about: points to sources and privacy instead of repeating them", strpos($o, 'href="/sources.php"') !== false
+    && strpos($o, 'href="/privacy.php"') !== false && strpos($o, 'sees your IP address') === false);
+$o2 = renderTo("sources.php", ["title" => "Data Sources"]);
+check("sources: photo licence and IP note", strpos($o2, 'CC BY-SA 4.0') !== false && strpos($o2, 'sees your IP address') !== false);
+$o2 = renderTo("privacy.php", ["title" => "Privacy"]);
+check("privacy: photo IP note", strpos($o2, 'Open Food Facts sees') !== false && strpos($o2, 'images.openfoodfacts.org') !== false);
 check("footer: photo credit", strpos($o, 'Product photos by Open Food Facts') !== false);
 
 query("DELETE FROM brands WHERE name LIKE 'Dump %'");
@@ -1917,6 +1924,54 @@ check("all " . count($all) . " sitemap URLs return 200", $bad === [] && count($a
 check("a product sitemap past the end is 404", $st === 404);
 [$st] = http_req($sm, "/sitemap-products-0.xml");
 check("product sitemap 0 is 404", $st === 404);
+
+section("HTTP: legal and trust pages");
+$lp = http_server();
+foreach (["/privacy.php" => "Privacy policy", "/terms.php" => "Disclaimer and terms of use",
+          "/corrections.php" => "Corrections", "/sources.php" => "Data sources and licences"] as $p => $h) {
+    [$st, $hs, $body] = http_req($lp, $p);
+    check("$p renders", $st === 200 && strpos($body, $h) !== false);
+    structureChecks($p, $body);
+}
+[$st, $hs, $body] = http_req($lp, "/privacy.php");
+check("privacy: placeholders when CONTROLLER_NAME and CONTACT_EMAIL are unset",
+    strpos($body, '[not set: CONTROLLER_NAME]') !== false && strpos($body, '[not set: CONTACT_EMAIL]') !== false);
+check("privacy: retention from MESSAGE_RETENTION_DAYS (default 180)", substr_count($body, "180 days") >= 2);
+check("privacy: cookie, Cloudflare, ICO and no analytics", strpos($body, "<strong>priorities</strong>") !== false
+    && strpos($body, "Cloudflare") !== false && strpos($body, "ico.org.uk") !== false && strpos($body, "no analytics") !== false);
+check("privacy: no advertising section while ads are off", strpos($body, "Advertising and cookies") === false);
+check("privacy: no Turnstile paragraph while it is off", strpos($body, "Turnstile") === false);
+[$st, $hs, $body] = http_req($lp, "/terms.php");
+check("terms: placeholder when CONTROLLER_NAME is unset", strpos($body, '[not set: CONTROLLER_NAME]') !== false);
+check("terms: not advice, no affiliation, trade marks, liability", strpos($body, "not endorsements") !== false
+    && strpos($body, "not affiliated") !== false && strpos($body, "Trade marks") !== false && strpos($body, "no liability") !== false);
+[$st, $hs, $body] = http_req($lp, "/sources.php");
+check("sources: ODbL, DbCL and OGL with links", strpos($body, "Contains data from Open Food Facts, available under the") !== false
+    && strpos($body, "opendatacommons.org/licenses/odbl/1-0/") !== false && strpos($body, "dbcl/1-0/") !== false
+    && strpos($body, "Open Government Licence v3.0") !== false);
+$named = http_server(["CONTROLLER_NAME" => 'Dale <b>Test</b> & Co', "CONTACT_EMAIL" => "privacy@example.com", "MESSAGE_RETENTION_DAYS" => "90"]);
+[$st, $hs, $body] = http_req($named, "/privacy.php");
+check("privacy: controller and email shown, escaped", strpos($body, "Dale &lt;b&gt;Test&lt;/b&gt; &amp; Co") !== false
+    && strpos($body, 'href="mailto:privacy@example.com"') !== false && strpos($body, "[not set") === false);
+check("privacy: retention follows MESSAGE_RETENTION_DAYS", strpos($body, "90 days") !== false && strpos($body, "180 days") === false);
+$ads = http_server(["ADS_ENABLED" => "1"]);
+[$st, $hs, $body] = http_req($ads, "/privacy.php");
+check("privacy: ADS_ENABLED brings in the marked advertising section", strpos($body, "Advertising and cookies") !== false
+    && strpos($body, "must be completed before ADS_ENABLED") !== false);
+foreach (["/", "/about.php", "/brand.php?brand=Valley+Fresh", "/nope", "/privacy.php"] as $p) {
+    [$st, $hs, $body] = http_req($lp, $p);
+    check("$p: footer links to privacy, terms, corrections and sources", strpos($body, 'href="/privacy.php"') !== false
+        && strpos($body, 'href="/terms.php"') !== false && strpos($body, 'href="/corrections.php"') !== false
+        && strpos($body, 'href="/sources.php"') !== false && strpos($body, "Product photos by Open Food Facts") !== false);
+}
+[$st, $hs, $body] = http_req($lp, "/brand.php?brand=Valley+Fresh");
+check("brand: report link pre-fills the contact form", strpos($body, 'href="/contact.php?about=brand&amp;item=Valley%20Fresh"') !== false);
+check("brand: recorded type with its category and a not-verified note", strpos($body, "Recorded type") !== false
+    && strpos($body, "not independently verified") !== false);
+check("brand: data freshness line", strpos($body, "Data last updated") !== false || strpos($body, "no dated source") !== false);
+check("report_problem_url encodes", report_problem_url("brand", 'A&B "x"') === "/contact.php?about=brand&item=A%26B%20%22x%22");
+check("newest_date picks the newest", newest_date(null, "2026-01-02 00:00:00", "2026-03-01", "") === "2026-03-01");
+check("long_date", long_date("2026-11-24 10:00:00") === "24 November 2026");
 
 section("every POST form carries a CSRF token");
 foreach (array_merge(glob(__DIR__ . "/../templates/*.php"), glob(__DIR__ . "/../templates/admin/*.php")) as $tpl) {

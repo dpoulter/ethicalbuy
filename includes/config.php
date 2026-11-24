@@ -16,6 +16,7 @@ require_once(__DIR__ . "/ratelimit.php");
 require_once(__DIR__ . "/contact.php");
 require_once(__DIR__ . "/headers.php");
 require_once(__DIR__ . "/seo.php");
+require_once(__DIR__ . "/legal.php");
 
 // never render errors to visitors in production; always log them
 install_error_handling();
