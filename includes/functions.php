@@ -37,6 +37,13 @@ function json_for_html($value)
  */
 function apologize($message)
 {
+    // the database being down is not something to apologise for page by
+    // page: show the maintenance page with a 503 instead
+    if (db_unavailable())
+    {
+        show_error_page(503);
+    }
+
     render("apology.php", ["title" => "Sorry", "message" => $message]);
     exit;
 }
@@ -120,6 +127,7 @@ function query(/* $sql [, ... ] */)
             // log the detail, tell the visitor nothing
             error_log("Database connection failed: " . $e->getMessage());
             $handle = null;
+            $GLOBALS["ETHICALBUY_DB_DOWN"] = true;
             return false;
         }
     }
@@ -140,6 +148,14 @@ function query(/* $sql [, ... ] */)
         error_log("Query failed: " . $e->getMessage() . " -- SQL: " . $sql);
         return false;
     }
+}
+
+/**
+ * True once a connection to the database has been tried and failed.
+ */
+function db_unavailable()
+{
+    return !empty($GLOBALS["ETHICALBUY_DB_DOWN"]);
 }
 
 /**
@@ -269,29 +285,6 @@ function rating_score($rating)
     $formatted = ($rating == (int) $rating) ? (string) (int) $rating : (string) $rating;
 
     return "$formatted/10";
-}
-
-/**
- * True if this request arrived over TLS.
- *
- * X-Forwarded-Proto is only believed when TRUST_PROXY=1, because any client
- * can send that header when the app is reachable directly.
- */
-function is_secure_request()
-{
-    if (!empty($_SERVER["HTTPS"]) && strtolower($_SERVER["HTTPS"]) !== "off")
-    {
-        return true;
-    }
-
-    if (env("TRUST_PROXY", "0") === "1"
-        && strtolower($_SERVER["HTTP_X_FORWARDED_PROTO"] ?? "") === "https")
-    {
-        return true;
-    }
-
-    // local development over plain HTTP
-    return in_array($_SERVER["REMOTE_ADDR"] ?? "", ["127.0.0.1", "::1"], true);
 }
 
 /**

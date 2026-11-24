@@ -6,8 +6,7 @@
   <h3 class="notice-panel__title">Sorry!</h3>
   <p class="notice-panel__message"><?= e($message) ?></p>
   <p class="mb-0">
-    <a href="javascript:history.go(-1);">Back</a>
-    &middot; <a href="/search.php">Search</a>
+    <a href="/search.php">Search</a>
     &middot; <a href="/index.php">Home</a>
   </p>
 </div>

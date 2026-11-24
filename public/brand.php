@@ -7,6 +7,7 @@ $name = input_string($_GET, "brand");
 
 if ($name === "")
 {
+    http_response_code(404);
     apologize("No brand was specified.");
 }
 

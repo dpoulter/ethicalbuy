@@ -2,6 +2,15 @@
 
 require_once(__DIR__ . "/../includes/config.php");
 
+// Caddy sends every missing path here; anything that is not a route has
+// already been answered with a 404 by enforce_known_path()
+$route = PHP_SAPI === "cli" ? "home" : front_controller_route(request_path());
+
+if ($route !== "home")
+{
+    show_error_page(404);
+}
+
 $rows = get_categories();
 
 // handle failure before rendering anything, so apologize() owns the whole page

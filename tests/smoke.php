@@ -375,7 +375,12 @@ unset($_SERVER["HTTPS"]);
 $_SERVER["HTTP_X_FORWARDED_PROTO"] = "https";
 check("forged X-Forwarded-Proto ignored when TRUST_PROXY=0", !is_secure_request());
 putenv("TRUST_PROXY=1");
-check("X-Forwarded-Proto honoured when TRUST_PROXY=1", is_secure_request());
+check("X-Forwarded-Proto ignored from a non-loopback peer even with TRUST_PROXY=1", !is_secure_request());
+$_SERVER["REMOTE_ADDR"] = "127.0.0.1";
+check("X-Forwarded-Proto honoured from loopback when TRUST_PROXY=1", is_secure_request());
+$_SERVER["HTTP_X_FORWARDED_PROTO"] = "http";
+check("X-Forwarded-Proto http from the proxy is insecure", !is_secure_request());
+$_SERVER["REMOTE_ADDR"] = "203.0.113.9";
 putenv("TRUST_PROXY=0");
 unset($_SERVER["HTTP_X_FORWARDED_PROTO"]);
 $_SERVER["REMOTE_ADDR"] = "127.0.0.1";
@@ -1413,6 +1418,104 @@ check("footer: photo credit", strpos($o, 'Product photos by Open Food Facts') !=
 
 query("DELETE FROM brands WHERE name LIKE 'Dump %'");
 @unlink($gz);
+
+
+// ---------- over real HTTP ----------
+// The checks below start PHP's built-in server on the public/ directory and
+// talk to it over a socket, so status codes and headers are the real thing.
+// Each distinct environment gets its own server.
+
+function http_server($env = []) {
+    static $servers = [];
+    $base = [
+        "DB_NAME" => getenv("DB_NAME"), "DB_USER" => getenv("DB_USER"), "DB_PASSWORD" => getenv("DB_PASSWORD"),
+        "APP_DEBUG" => "0", "PATH" => getenv("PATH"),
+    ];
+    $env = array_merge($base, $env);
+    ksort($env);
+    $key = md5(json_encode($env));
+    if (isset($servers[$key])) { return $servers[$key]["port"]; }
+    $sock = stream_socket_server("tcp://127.0.0.1:0");
+    $port = (int) substr(strrchr(stream_socket_get_name($sock, false), ":"), 1);
+    fclose($sock);
+    $proc = proc_open([PHP_BINARY, "-S", "127.0.0.1:$port", "-t", __DIR__ . "/../public", __DIR__ . "/router.php"],
+        [0 => ["file", "/dev/null", "r"], 1 => ["file", "/dev/null", "w"], 2 => ["file", "/dev/null", "w"]],
+        $pipes, null, $env);
+    for ($i = 0; $i < 100; $i++) {
+        $c = @stream_socket_client("tcp://127.0.0.1:$port", $errno, $errstr, 0.1);
+        if ($c) { fclose($c); break; }
+        usleep(50000);
+    }
+    $servers[$key] = ["port" => $port, "proc" => $proc];
+    register_shutdown_function(function () use ($proc) { proc_terminate($proc); });
+    return $port;
+}
+
+/**
+ * Raw HTTP/1.0 request. Returns [status, headers (lower-case name => [values]), body].
+ */
+function http_req($port, $path, $opts = []) {
+    $method = $opts["method"] ?? "GET";
+    $headers = array_merge(["Host" => "localhost"], $opts["headers"] ?? []);
+    $body = $opts["body"] ?? null;
+    if (is_array($body)) {
+        $body = http_build_query($body);
+        $headers["Content-Type"] = "application/x-www-form-urlencoded";
+    }
+    if ($body !== null) { $headers["Content-Length"] = strlen($body); }
+    $req = "$method $path HTTP/1.0\r\n";
+    foreach ($headers as $k => $v) { $req .= "$k: $v\r\n"; }
+    $req .= "Connection: close\r\n\r\n" . ($body ?? "");
+    $c = stream_socket_client("tcp://127.0.0.1:$port", $errno, $errstr, 5);
+    if (!$c) { return [0, [], ""]; }
+    stream_set_timeout($c, 20);
+    fwrite($c, $req);
+    $raw = stream_get_contents($c);
+    fclose($c);
+    [$head, $content] = array_pad(explode("\r\n\r\n", $raw, 2), 2, "");
+    $lines = explode("\r\n", $head);
+    $status = preg_match('~^HTTP/\S+ (\d{3})~', array_shift($lines), $m) ? (int) $m[1] : 0;
+    $hs = [];
+    foreach ($lines as $line) {
+        [$k, $v] = array_pad(explode(":", $line, 2), 2, "");
+        $hs[strtolower(trim($k))][] = trim($v);
+    }
+    return [$status, $hs, $content];
+}
+
+function hdr($hs, $name) { return $hs[strtolower($name)][0] ?? null; }
+
+// a fresh made-up visitor address per call, so rate limit buckets never
+// leak between checks
+function fake_ip() { static $n = 0; $n++; return "198.51." . intdiv($n, 250) . "." . ($n % 250 + 1); }
+
+section("HTTP: unknown paths are real 404s");
+$port = http_server();
+foreach (["/nope.php", "/nope", "/brand.php/extra", "/includes/config.php", "/assets/nope.css.php"] as $p) {
+    [$st, $hs, $body] = http_req($port, $p);
+    check("$p -> 404", $st === 404);
+}
+[$st, $hs, $body] = http_req($port, "/nope.php");
+check("404 page is the friendly page in the site's layout", strpos($body, "Page not found") !== false
+    && strpos($body, "site-nav") !== false && strpos($body, "site-footer") !== false);
+check("404 page reveals no paths", strpos($body, __DIR__) === false && strpos($body, "includes/") === false);
+[$st, $hs, $body] = http_req($port, "/");
+check("/ -> 200", $st === 200);
+[$st, $hs, $body] = http_req($port, "/index.php");
+check("/index.php -> 200", $st === 200);
+[$st, $hs, $body] = http_req($port, "/about.php");
+check("/about.php -> 200", $st === 200);
+[$st, $hs, $body] = http_req($port, "/brand.php");
+check("brand.php with no brand -> 404", $st === 404);
+
+section("HTTP: database unreachable");
+$down = http_server(["DB_HOST" => "127.0.0.1", "DB_NAME" => "no_such_db_here", "DB_PASSWORD" => "wrong"]);
+foreach (["/", "/search.php?q=milk", "/brand.php?brand=Valley+Fresh"] as $p) {
+    [$st, $hs, $body] = http_req($down, $p);
+    check("$p with no database -> 503 maintenance page", $st === 503 && strpos($body, "Down for maintenance") !== false);
+    check("$p with no database leaks nothing", stripos($body, "SQLSTATE") === false && stripos($body, "PDO") === false
+        && stripos($body, "no_such_db_here") === false);
+}
 
 echo $fails === 0 ? "\nALL PASS\n" : "\n$fails FAILURE(S)\n";
 exit($fails === 0 ? 0 : 1);
