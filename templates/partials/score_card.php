@@ -63,7 +63,7 @@
                   <span class="score score--none score--sm"><span class="score__value score__value--text">Not assessed</span></span>
                 <?php else: ?>
                   <?php $rating = $row["score"]; require(TEMPLATE_DIR . "/partials/rating_badge.php"); ?>
-                  <span class="score-bar score-bar--<?= e(rating_class($row["score"])) ?>" aria-hidden="true"><span style="width: <?= (int) round($row["score"] * 10) ?>%"></span></span>
+                  <span class="score-bar score-bar--<?= e(rating_class($row["score"])) ?>" aria-hidden="true"><svg viewBox="0 0 100 1" preserveAspectRatio="none" focusable="false"><rect width="<?= max(0, min(100, (int) round($row["score"] * 10))) ?>" height="1"/></svg></span>
                 <?php endif ?>
               </td>
               <td class="small"><?= e($row["sourced"]) ?></td>

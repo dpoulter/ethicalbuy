@@ -504,6 +504,8 @@ function input_string(array $source, $key, $default = "")
  */
 function csrf_token()
 {
+    ensure_session();
+
     if (empty($_SESSION["csrf_token"]))
     {
         $_SESSION["csrf_token"] = bin2hex(random_bytes(32));
@@ -525,6 +527,12 @@ function csrf_field()
  */
 function csrf_valid($token)
 {
+    // only resume a session the visitor already has; never start one here
+    if (isset($_COOKIE[session_name()]))
+    {
+        ensure_session();
+    }
+
     return !empty($_SESSION["csrf_token"])
         && is_string($token)
         && hash_equals($_SESSION["csrf_token"], $token);

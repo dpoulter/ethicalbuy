@@ -1245,7 +1245,7 @@ query("DELETE FROM brands WHERE name LIKE 'Own Test %'");
 section("visual refresh");
 $o = renderTo("about.php", ["title" => "About"]);
 check("layout links the site stylesheet after Bootstrap",
-    strpos($o, '<link href="/assets/site.css" rel="stylesheet">') !== false
+    preg_match('~<link href="/assets/site\.css\?v=[0-9a-f]{12}" rel="stylesheet">~', $o) === 1
     && strpos($o, 'bootstrap.min.css') < strpos($o, '/assets/site.css'));
 check("stylesheet exists", is_file(__DIR__ . "/../public/assets/site.css"));
 check("footer keeps the Open Food Facts attribution", strpos($o, 'Open Database Licence (ODbL)') !== false);
@@ -1296,7 +1296,7 @@ foreach (array_unique($m[1]) as $hex) {
     if ($sat > 0.15 && !($hue >= 190 && $hue <= 250)) { $offenders[] = "#$hex"; }
 }
 check("no red, amber or green in the chrome", $offenders === []) || print("   " . implode(", ", $offenders) . "\n");
-check("score-bar uses the score ramp", strpos($css, '.score-bar--danger    > span { background: var(--score-danger-bar); }') !== false);
+check("score-bar uses the score ramp", strpos($css, '.score-bar--danger    rect { fill: var(--score-danger-bar); }') !== false);
 $o = renderTo("about.php", ["title" => "About"]);
 check("wordmark is the neutral tick mark", strpos($o, '<circle cx="12" cy="12" r="9.5"') !== false && strpos($o, 'M20 4c-7.5') === false);
 
@@ -1428,7 +1428,7 @@ check("product: photo credit links to the OFF page", strpos($html, 'Photo:') !==
     && strpos($html, '<a href="https://world.openfoodfacts.org/product/D001" target="_blank" rel="noopener noreferrer">Open Food Facts contributors</a>,') !== false
     && strpos($html, 'CC BY-SA 4.0') !== false);
 [$st, $html] = runPage("product.php", ["code" => "D003"]);
-check("product without photo: placeholder, no img, no credit", $st === 200 && strpos($html, 'thumb thumb--empty') !== false
+check("product without photo: placeholder, no img, no credit", $st === 200 && preg_match('~thumb thumb--\d+ thumb--empty~', $html) === 1
     && strpos($html, '<img ') === false && strpos($html, 'Photo:') === false);
 // runs one statement as the importer's database user (the site's user cannot write products)
 function asImporter($sql) {
@@ -1451,7 +1451,7 @@ check("brand: header shows its most scanned product's photo", strpos($html, 'src
 check("brand: product table thumbnails", substr_count($html, 'loading="lazy"') >= 3);
 [$st, $html] = runPage("brand.php", ["brand" => "Dump Delta"]);
 $deltaHeader = substr($html, 0, strpos($html, 'Why this score'));
-check("brand without photo renders with placeholder", $st === 200 && strpos($deltaHeader, 'thumb thumb--empty') !== false
+check("brand without photo renders with placeholder", $st === 200 && preg_match('~thumb thumb--\d+ thumb--empty~', $deltaHeader) === 1
     && strpos($deltaHeader, '<img ') === false);
 check("brand without photo: other brands keep theirs", strpos($html, 'src="' . $img("D002")["image_url"] . '"') !== false);
 [$st, $html] = runPage("search.php", ["q" => "Alpha"]);
@@ -1794,6 +1794,59 @@ check("MESSAGE_RETENTION_DAYS is honoured", $mine() === ["new"] && strpos($out, 
 check("the site's own account cannot purge", $rc === 1 && $mine() === ["new"]);
 asImporter("DELETE FROM contact_messages WHERE name = '$marker'");
 asImporter("DELETE FROM message_log WHERE message_text = '$marker'");
+
+section("HTTP: security headers on every page type");
+$hp = http_server();
+$pageTypes = ["/", "/search.php", "/search.php?q=milk", "/brand.php?brand=Valley+Fresh", "/priorities.php",
+    "/about.php", "/contact.php", "/nope", "/brand.php?brand=No+Such+Brand", "/admin/"];
+foreach ($pageTypes as $p) {
+    [$st, $hs, $body] = http_req($hp, $p);
+    $csp = (string) hdr($hs, "Content-Security-Policy");
+    check("$p ($st): CSP", strpos($csp, "default-src 'self'") === 0 && strpos($csp, "script-src 'self';") !== false
+        && strpos($csp, "style-src 'self';") !== false && strpos($csp, "frame-ancestors 'none'") !== false
+        && strpos($csp, "img-src 'self' data: https://images.openfoodfacts.org https://images.openfoodfacts.net;") !== false
+        && strpos($csp, "base-uri 'self'") !== false && strpos($csp, "form-action 'self'") !== false
+        && strpos($csp, "unsafe-inline") === false && strpos($csp, "challenges.cloudflare.com") === false);
+    check("$p: HSTS without preload", hdr($hs, "Strict-Transport-Security") === "max-age=31536000");
+    check("$p: nosniff, referrer, COOP", hdr($hs, "X-Content-Type-Options") === "nosniff"
+        && hdr($hs, "Referrer-Policy") === "strict-origin-when-cross-origin"
+        && hdr($hs, "Cross-Origin-Opener-Policy") === "same-origin");
+    $pp = (string) hdr($hs, "Permissions-Policy");
+    check("$p: Permissions-Policy", strpos($pp, "camera=()") !== false && strpos($pp, "microphone=()") !== false
+        && strpos($pp, "geolocation=()") !== false && strpos($pp, "payment=()") !== false);
+    check("$p: no X-Powered-By", hdr($hs, "X-Powered-By") === null);
+    check("$p: no inline script or style in the markup", preg_match('~<script(?![^>]*(\bsrc=|type="application/json"))[^>]*>~i', $body) === 0
+        && stripos($body, " style=") === false && stripos($body, "<style") === false && stripos($body, "javascript:") === false
+        && preg_match('~\son[a-z]+="~i', $body) === 0);
+}
+[$st, $hs, $body] = http_req($hp, "/");
+check("public pages set no cookie", !isset($hs["set-cookie"]));
+check("stylesheet fingerprinted", preg_match('~/assets/site\.css\?v=[0-9a-f]{12}~', $body) === 1);
+[$st, $hs] = http_req($hp, "/contact.php");
+$sc = implode("\n", $hs["set-cookie"] ?? []);
+check("session cookie: HttpOnly, SameSite=Lax", stripos($sc, "HttpOnly") !== false && stripos($sc, "SameSite=Lax") !== false);
+$sp = http_server(["TRUST_PROXY" => "1"]);
+[$st, $hs] = http_req($sp, "/contact.php", ["headers" => ["X-Forwarded-Proto" => "https"]]);
+check("session cookie Secure behind the HTTPS proxy", stripos(implode("\n", $hs["set-cookie"] ?? []), "secure") !== false);
+[$st, $hs, $body] = http_req($sp, "/priorities.php", ["headers" => ["X-Forwarded-Proto" => "https"]]);
+preg_match('~name="csrf_token" value="([0-9a-f]+)"~', $body, $t);
+$cookie = explode(";", ($hs["set-cookie"] ?? [""])[0])[0];
+[$st, $hs] = http_req($sp, "/priorities.php", ["method" => "POST", "headers" => ["X-Forwarded-Proto" => "https", "Cookie" => $cookie],
+    "body" => ["csrf_token" => $t[1] ?? "", "w_editorial" => "5"]]);
+$pc = "";
+foreach ($hs["set-cookie"] ?? [] as $c) { if (stripos($c, "priorities=") === 0) { $pc = $c; } }
+check("priorities cookie: Secure, HttpOnly, SameSite=Lax, path /", stripos($pc, "secure") !== false && stripos($pc, "httponly") !== false
+    && stripos($pc, "samesite=lax") !== false && stripos($pc, "path=/") !== false);
+check("over-long priorities cookie ignored", parse_weights(str_repeat("editorial=5&", 40)) === default_weights());
+check("priorities cookie still clamped", parse_weights("editorial=99&nutrition=-4&bogus=3")["editorial"] === WEIGHT_MAX
+    && parse_weights("editorial=99&nutrition=-4")["nutrition"] === WEIGHT_MIN && !isset(parse_weights("bogus=3")["bogus"]));
+$tp = http_server(["TURNSTILE_SITE_KEY" => "1x00000000000000000000AA", "TURNSTILE_SECRET" => "1x0000000000000000000000000000000AA"]);
+[$st, $hs, $body] = http_req($tp, "/contact.php");
+$csp = (string) hdr($hs, "Content-Security-Policy");
+check("Turnstile on: CSP allows only Cloudflare's challenge host, for script and frame", strpos($csp, "script-src 'self' https://challenges.cloudflare.com;") !== false
+    && strpos($csp, "frame-src https://challenges.cloudflare.com") !== false);
+check("Turnstile on: widget rendered", strpos($body, 'class="cf-turnstile') !== false);
+check("ads off by default: no extra CSP hosts", csp_ads_sources() === [] && !ads_enabled());
 
 section("every POST form carries a CSRF token");
 foreach (array_merge(glob(__DIR__ . "/../templates/*.php"), glob(__DIR__ . "/../templates/admin/*.php")) as $tpl) {

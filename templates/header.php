@@ -4,8 +4,8 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
   <title><?= isset($title) ? e($title) . " | Ethical Buy" : "Ethical Buy" ?></title>
-  <link href="/vendor/bootstrap/bootstrap.min.css" rel="stylesheet">
-  <link href="/assets/site.css" rel="stylesheet">
+  <link href="<?= e(asset_url("/vendor/bootstrap/bootstrap.min.css")) ?>" rel="stylesheet">
+  <link href="<?= e(asset_url("/assets/site.css")) ?>" rel="stylesheet">
 </head>
 <body>
 <?php
