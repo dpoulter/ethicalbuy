@@ -13,6 +13,7 @@
 function error_page_text($code)
 {
     $pages = [
+        401 => ["Sign in required", "This page needs you to sign in."],
         403 => ["Not allowed", "You don't have permission to see this page."],
         404 => ["Page not found", "We couldn't find that page. It may have moved, or the address may be mistyped."],
         429 => ["Too many requests", "You've made a lot of requests in a short time. Please wait a little and try again."],

@@ -319,20 +319,61 @@ function basic_auth_credentials()
 }
 
 /**
+ * True if this request is for the admin area.
+ */
+function is_admin_request()
+{
+    $script = (string) ($_SERVER["SCRIPT_NAME"] ?? "");
+    $path = request_path();
+
+    return strpos($script, "/admin/") === 0 || $path === "/admin" || strpos($path, "/admin/") === 0;
+}
+
+/**
+ * When ADMIN_ALLOWED_HOSTS is set, /admin answers only on those host names.
+ * Anywhere else it is a plain 404, before any login prompt, so the public
+ * site does not even reveal that an admin area exists. Unset means no
+ * restriction, which keeps local development working.
+ */
+function enforce_admin_host()
+{
+    if (PHP_SAPI === "cli" || !is_admin_request())
+    {
+        return;
+    }
+
+    // admin pages are never cached by a browser or by Cloudflare
+    header("Cache-Control: no-store");
+
+    $allowed = env_list("ADMIN_ALLOWED_HOSTS");
+
+    if ($allowed && !in_array(request_host(), $allowed, true))
+    {
+        show_error_page(404);
+    }
+}
+
+/**
  * Gate for every admin page. Sends 401 and exits unless valid credentials
  * were supplied. Fails closed: if the app is misconfigured, nobody gets in.
  *
  * Credentials come from ADMIN_USER and ADMIN_PASSWORD_HASH, the latter being
  * a password_hash() digest so no plaintext password is ever stored.
+ *
+ * Failed attempts are counted per client IP. After ADMIN_AUTH_MAX_FAILURES
+ * (5) failures within ADMIN_AUTH_WINDOW_MINUTES (15), every admin request
+ * from that IP gets a 429 for ADMIN_AUTH_LOCK_MINUTES (15), right password
+ * or not. Neither the username nor the password tried is ever logged.
  */
 function require_admin()
 {
+    header("Cache-Control: no-store");
+
     // Basic credentials travel base64-encoded, which is not encryption
     if (!is_secure_request())
     {
         error_log("Refused admin access over plain HTTP");
-        http_response_code(403);
-        exit("Admin is only available over HTTPS.");
+        show_error_page(403, "The admin area is only available over HTTPS.");
     }
 
     $user = env("ADMIN_USER", "");
@@ -341,27 +382,46 @@ function require_admin()
     if ($user === "" || $hash === "")
     {
         error_log("Admin is not configured: set ADMIN_USER and ADMIN_PASSWORD_HASH");
-        http_response_code(500);
-        exit("Admin is not configured.");
+        show_error_page(500);
+    }
+
+    $lock_span = 60 * rate_setting("ADMIN_AUTH_LOCK_MINUTES", 15);
+    [$locked, $retry] = rate_count("admin_lock", $lock_span);
+    if ($locked > 0)
+    {
+        show_error_page(429, "Too many failed sign-in attempts. Please wait and try again later.", $retry);
     }
 
     [$given_user, $given_pass] = basic_auth_credentials();
 
-    $ok = is_string($given_user)
-        && hash_equals($user, $given_user)
-        && password_verify((string) $given_pass, $hash);
+    // both checks always run, so timing does not reveal which one failed
+    $user_ok = is_string($given_user) && hash_equals($user, $given_user);
+    $pass_ok = password_verify((string) $given_pass, $hash);
 
-    if (!$ok)
+    if ($user_ok && $pass_ok)
     {
-        if ($given_user !== null)
-        {
-            error_log("Failed admin login for user: " . $given_user);
-        }
-
-        header('WWW-Authenticate: Basic realm="Ethical Buy admin", charset="UTF-8"');
-        http_response_code(401);
-        exit("Authentication required.");
+        return;
     }
+
+    if ($given_user !== null)
+    {
+        $where = truncated_ip(client_ip());
+        error_log("Failed admin login from $where");
+        write_log("admin", "failed login from $where");
+
+        rate_hit("admin_fail");
+        [$failures] = rate_count("admin_fail", 60 * rate_setting("ADMIN_AUTH_WINDOW_MINUTES", 15));
+
+        if ($failures >= rate_setting("ADMIN_AUTH_MAX_FAILURES", 5))
+        {
+            rate_hit("admin_lock");
+            error_log("Admin login locked for $where after $failures failures");
+            write_log("admin", "login locked for $where after $failures failures");
+        }
+    }
+
+    header('WWW-Authenticate: Basic realm="Ethical Buy admin", charset="UTF-8"');
+    show_error_page(401);
 }
 
 /**

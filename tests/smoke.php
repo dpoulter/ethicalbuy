@@ -1489,6 +1489,22 @@ function hdr($hs, $name) { return $hs[strtolower($name)][0] ?? null; }
 // leak between checks
 function fake_ip() { static $n = 0; $n++; return "198.51." . intdiv($n, 250) . "." . ($n % 250 + 1); }
 
+// rows read as the importer, which may read the log tables the site only writes
+function importerRows($sql, ...$params) {
+    $env = array_merge(getenv(), ["DB_USER" => getenv("IMPORT_DB_USER") ?: "ethicalbuy_import",
+        "DB_PASSWORD" => getenv("IMPORT_DB_PASSWORD") ?: "ethicalbuy_import_dev",
+        "T_SQL" => $sql, "T_PARAMS" => json_encode($params)]);
+    $code = 'require ' . var_export(__DIR__ . "/../includes/config.php", true)
+          . '; echo json_encode(query(getenv("T_SQL"), ...json_decode(getenv("T_PARAMS"), true)));';
+    $proc = proc_open([PHP_BINARY, "-r", $code], [1 => ["pipe", "w"], 2 => ["pipe", "w"]], $pipes, null, $env);
+    $out = stream_get_contents($pipes[1]);
+    proc_close($proc);
+    return json_decode($out, true);
+}
+
+// counters from an earlier run would otherwise trip the limits below
+check("test setup: rate limit counters cleared", asImporter("DELETE FROM rate_limits"));
+
 section("HTTP: unknown paths are real 404s");
 $port = http_server();
 foreach (["/nope.php", "/nope", "/brand.php/extra", "/includes/config.php", "/assets/nope.css.php"] as $p) {
@@ -1515,6 +1531,65 @@ foreach (["/", "/search.php?q=milk", "/brand.php?brand=Valley+Fresh"] as $p) {
     check("$p with no database -> 503 maintenance page", $st === 503 && strpos($body, "Down for maintenance") !== false);
     check("$p with no database leaks nothing", stripos($body, "SQLSTATE") === false && stripos($body, "PDO") === false
         && stripos($body, "no_such_db_here") === false);
+}
+
+
+section("HTTP: admin host restriction and login throttle");
+$adminHash = password_hash("correct horse", PASSWORD_DEFAULT);
+$adminEnv = ["ADMIN_USER" => "dale", "ADMIN_PASSWORD_HASH" => $adminHash,
+             "ADMIN_ALLOWED_HOSTS" => "ethicalbuy.contelo.ai, localhost", "TRUST_PROXY" => "1"];
+$ap = http_server($adminEnv);
+$viaProxy = function ($ip, $host, $extra = []) {
+    return array_merge(["Host" => $host, "CF-Connecting-IP" => $ip, "X-Forwarded-Proto" => "https"], $extra);
+};
+foreach (["/admin/", "/admin", "/admin/index.php", "/admin/edit.php", "/admin/nope.php"] as $p) {
+    [$st, $hs, $body] = http_req($ap, $p, ["headers" => $viaProxy(fake_ip(), "ethicalbuy.net")]);
+    check("$p on the public host -> 404", $st === 404);
+    check("$p on the public host: no login prompt", hdr($hs, "WWW-Authenticate") === null);
+}
+[$st, $hs] = http_req($ap, "/admin/", ["headers" => $viaProxy(fake_ip(), "ETHICALBUY.CONTELO.AI:443")]);
+check("/admin/ on the allowed host prompts for auth", $st === 401 && strpos((string) hdr($hs, "WWW-Authenticate"), "Basic") === 0);
+check("admin responses are no-store", hdr($hs, "Cache-Control") === "no-store");
+$good = "Basic " . base64_encode("dale:correct horse");
+[$st, $hs, $body] = http_req($ap, "/admin/", ["headers" => $viaProxy(fake_ip(), "ethicalbuy.contelo.ai", ["Authorization" => $good])]);
+check("right credentials on the allowed host -> 200", $st === 200 && hdr($hs, "Cache-Control") === "no-store");
+[$st] = http_req($ap, "/admin/", ["headers" => ["Host" => "ethicalbuy.contelo.ai", "X-Forwarded-Proto" => "http", "Authorization" => $good]]);
+check("admin over plain HTTP from the proxy -> 403", $st === 403);
+$open = http_server(["ADMIN_USER" => "dale", "ADMIN_PASSWORD_HASH" => $adminHash]);
+[$st] = http_req($open, "/admin/", ["headers" => ["Host" => "anything.example"]]);
+check("ADMIN_ALLOWED_HOSTS unset -> no host restriction (local development)", $st === 401);
+
+$attacker = fake_ip();
+$bad = "Basic " . base64_encode("dale:wrong guess");
+$statuses = [];
+for ($i = 0; $i < 5; $i++) {
+    [$statuses[]] = http_req($ap, "/admin/", ["headers" => $viaProxy($attacker, "ethicalbuy.contelo.ai", ["Authorization" => $bad])]);
+}
+check("first five failures -> 401", $statuses === [401, 401, 401, 401, 401]);
+[$st, $hs] = http_req($ap, "/admin/", ["headers" => $viaProxy($attacker, "ethicalbuy.contelo.ai", ["Authorization" => $bad])]);
+check("sixth attempt -> 429 with Retry-After", $st === 429 && (int) hdr($hs, "Retry-After") > 0 && (int) hdr($hs, "Retry-After") <= 900);
+[$st] = http_req($ap, "/admin/", ["headers" => $viaProxy($attacker, "ethicalbuy.contelo.ai", ["Authorization" => $good])]);
+check("locked out even with the right password", $st === 429);
+[$st] = http_req($ap, "/admin/", ["headers" => $viaProxy(fake_ip(), "ethicalbuy.contelo.ai", ["Authorization" => $good])]);
+check("another address is not affected", $st === 200);
+$logged = importerRows("SELECT message_text FROM message_log WHERE module = 'admin' ORDER BY id DESC LIMIT 10") ?: [];
+$logText = implode("\n", array_column($logged, "message_text"));
+check("failed logins are logged with a truncated address", strpos($logText, "failed login from 198.51.") !== false
+    && preg_match('~198\.51\.\d+\.0/24~', $logText) === 1);
+check("log never holds the username or password tried", strpos($logText, "wrong guess") === false && strpos($logText, "dale") === false);
+
+section("every POST form carries a CSRF token");
+foreach (array_merge(glob(__DIR__ . "/../templates/*.php"), glob(__DIR__ . "/../templates/admin/*.php")) as $tpl) {
+    $src = file_get_contents($tpl);
+    $forms = preg_match_all('~<form\b[^>]*method="post"~i', $src);
+    if ($forms === 0) { continue; }
+    check(basename(dirname($tpl)) . "/" . basename($tpl) . ": $forms POST form(s), each with csrf_field()",
+        substr_count($src, "csrf_field()") >= $forms);
+}
+foreach (glob(__DIR__ . "/../public/admin/*.php") as $page) {
+    $src = file_get_contents($page);
+    if (strpos($src, '"POST"') === false) { continue; }
+    check("admin/" . basename($page) . ": checks csrf_valid() on POST", strpos($src, "csrf_valid(") !== false);
 }
 
 echo $fails === 0 ? "\nALL PASS\n" : "\n$fails FAILURE(S)\n";
