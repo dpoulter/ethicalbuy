@@ -18,6 +18,8 @@ DROP TABLE IF EXISTS products;
 DROP TABLE IF EXISTS brand_score_inputs;
 DROP TABLE IF EXISTS brand_scores;
 DROP TABLE IF EXISTS owner_company_candidates;
+-- counters only (migration 008); reset on a rebuild
+DROP TABLE IF EXISTS rate_limits;
 
 DROP VIEW IF EXISTS brand_v;
 DROP TABLE IF EXISTS brands;

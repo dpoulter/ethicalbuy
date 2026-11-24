@@ -2,9 +2,14 @@
 
 require_once(__DIR__ . "/../includes/config.php");
 
+enforce_browse_limit();
+
 // searching is a read, so it uses GET: results stay linkable and re-runnable.
 // "q" is the query; "search_string" is its older name and still works.
 $term = input_string($_GET, "q", input_string($_GET, "search_string"));
+
+// nobody needs more than this to find a brand; it also bounds the work
+$term = mb_substr($term, 0, SEARCH_TERM_MAX);
 
 $filters = [
     "term"         => $term,
@@ -78,13 +83,17 @@ if ($submitted)
         [$candidates, $product_total] = $found;
         [$products, $product_page, $product_pages] = paginate(
             rank_product_results($candidates, $weights),
-            (int) input_string($_GET, "page", "1")
+            page_number(input_string($_GET, "page", "1"))
         );
     }
 }
 
 render("search.php", [
     "title" => $submitted ? "Search Results" : "Search",
+    "description" => "Search Ethical Buy for a brand or product to see who owns it and how it scores.",
+    "canonical" => "/search.php",
+    // result pages are endless variations of one page
+    "noindex" => $submitted,
     "filters" => $filters,
     "submitted" => $submitted,
     "results" => $results,

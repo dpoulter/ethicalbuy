@@ -1,0 +1,101 @@
+// Home page category browser. Reads the brands from the JSON block that
+// templates/category_form.php writes; loaded as a file so the
+// Content-Security-Policy can forbid inline scripts.
+(function () {
+  const brands = JSON.parse(document.getElementById('brandsData').textContent);
+  const categorySelect = document.getElementById('categorySelect');
+  const brandList = document.getElementById('brandList');
+
+  function field(label, value) {
+    const div = document.createElement('div');
+    const strong = document.createElement('strong');
+    strong.textContent = label + ': ';
+    div.appendChild(strong);
+    div.appendChild(document.createTextNode(value === null ? '' : value));
+    return div;
+  }
+
+  function ratingBadge(b) {
+    // same markup as partials/rating_badge.php, so site.css styles both
+    const span = document.createElement('span');
+    span.className = 'score score--' + (b.ratingClass || 'none');
+    const value = document.createElement('span');
+    value.className = 'score__value' + (b.ratingLabel ? '' : ' score__value--text');
+    value.textContent = b.ratingScore;
+    span.appendChild(value);
+    if (b.ratingLabel) {
+      const label = document.createElement('span');
+      label.className = 'score__label';
+      label.textContent = b.ratingLabel;
+      span.appendChild(label);
+    }
+    if (b.thin) { span.title = 'Based on only part of what you said matters'; }
+    return span;
+  }
+
+  function brandItem(b) {
+    const li = document.createElement('li');
+    li.className = 'list-group-item' +
+      (b.ratingClass ? ' list-group-item-' + b.ratingClass : '');
+
+    const head = document.createElement('div');
+    head.className = 'd-flex justify-content-between align-items-center flex-wrap gap-2 mb-2';
+
+    const link = document.createElement('a');
+    link.href = 'brand.php?brand=' + encodeURIComponent(b.brand);
+    link.textContent = b.brand;
+    link.className = 'fw-bold';
+
+    // same box as partials/thumb.php: a neutral placeholder shows through
+    // if there is no photo or it fails to load
+    const thumb = document.createElement('span');
+    thumb.className = 'thumb thumb--56' + (b.image ? '' : ' thumb--empty');
+    if (b.image) {
+      const img = document.createElement('img');
+      img.src = b.image;
+      img.alt = '';
+      img.loading = 'lazy';
+      img.decoding = 'async';
+      img.width = img.height = 96;
+      img.referrerPolicy = 'no-referrer';
+      thumb.appendChild(img);
+    }
+    const name = document.createElement('span');
+    name.className = 'cell-with-thumb';
+    name.appendChild(thumb);
+    name.appendChild(link);
+    head.appendChild(name);
+    head.appendChild(ratingBadge(b));
+    li.appendChild(head);
+
+    li.appendChild(field('Our overall view', b.editorial));
+    li.appendChild(field('Type', b.type));
+    li.appendChild(field('Owner', b.owner));
+    li.appendChild(field('Availability', b.availability));
+    li.appendChild(field('Notes', b.notes));
+
+    return li;
+  }
+
+  function displayBrands(category) {
+    brandList.replaceChildren();
+
+    const items = brands[category];
+    if (!items) {
+      const li = document.createElement('li');
+      li.className = 'list-group-item';
+      li.textContent = 'No brands found for this category.';
+      brandList.appendChild(li);
+      return;
+    }
+
+    for (const b of items) {
+      brandList.appendChild(brandItem(b));
+    }
+  }
+
+  categorySelect.addEventListener('change', (e) => displayBrands(e.target.value));
+
+  // Initialize with the first category on page load
+  displayBrands(categorySelect.value);
+})();

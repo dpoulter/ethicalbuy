@@ -29,6 +29,7 @@ if ($_SERVER["REQUEST_METHOD"] === "POST")
 
 render("priorities.php", [
     "title" => "Your Priorities",
+    "description" => "Choose what matters most to you, and Ethical Buy weights every score to match.",
     "weights" => current_weights(),
     "chosen" => has_chosen_priorities(),
     "saved" => $saved,

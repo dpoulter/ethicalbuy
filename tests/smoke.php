@@ -26,6 +26,7 @@ $fails = 0;
 function check($label, $cond) {
     global $fails;
     if (!$cond) { $fails++; echo "FAIL: $label\n"; } else { echo "ok:   $label\n"; }
+    return (bool) $cond;
 }
 function section($name) { echo "\n-- $name --\n"; }
 
@@ -324,6 +325,54 @@ $sentOut = renderTo("contact.php", [
     "errors" => [], "sent" => true,
 ]);
 check("contact: success message on sent", strpos($sentOut, 'has been sent') !== false);
+$out = renderTo("contact.php", [
+    "title" => "Contact", "values" => ["name" => "", "email" => "", "message" => "", "about" => "brand", "item" => $evil . '" onfocus="x'],
+    "errors" => [], "sent" => false, "stamp" => "1.abc",
+]);
+structureChecks("contact report", $out);
+check("contact: reported item escaped in text and hidden field", strpos($out, '&lt;script&gt;') !== false
+    && strpos($out, '" onfocus="x') === false);
+check("contact: honeypot present and hidden by class", strpos($out, 'class="contact-trap" aria-hidden="true"') !== false
+    && strpos($out, 'name="website" tabindex="-1"') !== false);
+check("contact: no third-party script without Turnstile", strpos($out, 'challenges.cloudflare.com') === false);
+$out = renderTo("contact.php", ["title" => "Contact", "values" => ["name" => "", "email" => "", "message" => ""],
+    "errors" => [], "sent" => false, "turnstile_site_key" => "1x00000000000000000000AA"]);
+check("contact: Turnstile widget and script when the key is set", strpos($out, 'data-sitekey="1x00000000000000000000AA"') !== false
+    && strpos($out, '<script src="https://challenges.cloudflare.com/turnstile/v0/api.js"') !== false);
+
+section("contact validation");
+$okc = ["name" => "Sam", "email" => "sam@example.com", "message" => "Hello\r\nthere"];
+[$errs, $clean] = validate_contact($okc);
+check("valid message passes", $errs === []);
+check("line endings normalised", $clean["message"] === "Hello\nthere");
+[$errs] = validate_contact(array_merge($okc, ["name" => "Sam\r\nBcc: victim@example.com"]));
+check("header injection in name rejected", isset($errs["name"]));
+[$errs] = validate_contact(array_merge($okc, ["email" => "sam@example.com\r\nBcc: victim@example.com"]));
+check("header injection in email rejected", isset($errs["email"]));
+[$errs] = validate_contact(array_merge($okc, ["email" => "sam@example.com%0ABcc:x@example.com"]));
+check("encoded injection in email rejected", isset($errs["email"]));
+[$errs] = validate_contact(array_merge($okc, ["name" => str_repeat("n", 101)]));
+check("oversize name rejected", isset($errs["name"]));
+[$errs] = validate_contact(array_merge($okc, ["email" => str_repeat("e", 250) . "@example.com"]));
+check("oversize email rejected", isset($errs["email"]));
+[$errs] = validate_contact(array_merge($okc, ["message" => str_repeat("m", 5001)]));
+check("oversize message rejected", isset($errs["message"]));
+[$errs] = validate_contact(array_merge($okc, ["message" => "bad \x00 byte"]));
+check("control characters in message rejected", isset($errs["message"]));
+[$errs] = validate_contact(array_merge($okc, ["message" => "bad \xC3\x28 utf8"]));
+check("invalid UTF-8 rejected", isset($errs["message"]));
+[$errs, $clean] = validate_contact(array_merge($okc, ["about" => "brand", "item" => "Valley Fresh"]));
+check("problem report keeps its item", $clean["about"] === "brand" && contact_stored_message($clean) === "Problem report about brand: Valley Fresh\n\nHello\nthere");
+[$errs, $clean] = validate_contact(array_merge($okc, ["about" => "owner'; DROP", "item" => "x"]));
+check("unknown report type dropped", $clean["about"] === "" && contact_stored_message($clean) === "Hello\nthere");
+check("item with a newline dropped", contact_item("A\nB") === "");
+check("over-long item dropped", contact_item(str_repeat("i", 151)) === "");
+$stamp = contact_form_stamp(time() - 10);
+check("form stamp age read back", contact_form_age($stamp) === 10);
+check("forged form stamp rejected", contact_form_age((time() - 10) . "." . str_repeat("0", 64)) === null);
+check("garbage form stamp rejected", contact_form_age("soon") === null);
+check("day-old form stamp rejected", contact_form_age(contact_form_stamp(time() - 90000)) === null);
+check("Turnstile off by default", !turnstile_enabled());
 
 section("about.php template");
 $out = renderTo("about.php", ["title" => "About"]);
@@ -375,7 +424,12 @@ unset($_SERVER["HTTPS"]);
 $_SERVER["HTTP_X_FORWARDED_PROTO"] = "https";
 check("forged X-Forwarded-Proto ignored when TRUST_PROXY=0", !is_secure_request());
 putenv("TRUST_PROXY=1");
-check("X-Forwarded-Proto honoured when TRUST_PROXY=1", is_secure_request());
+check("X-Forwarded-Proto ignored from a non-loopback peer even with TRUST_PROXY=1", !is_secure_request());
+$_SERVER["REMOTE_ADDR"] = "127.0.0.1";
+check("X-Forwarded-Proto honoured from loopback when TRUST_PROXY=1", is_secure_request());
+$_SERVER["HTTP_X_FORWARDED_PROTO"] = "http";
+check("X-Forwarded-Proto http from the proxy is insecure", !is_secure_request());
+$_SERVER["REMOTE_ADDR"] = "203.0.113.9";
 putenv("TRUST_PROXY=0");
 unset($_SERVER["HTTP_X_FORWARDED_PROTO"]);
 $_SERVER["REMOTE_ADDR"] = "127.0.0.1";
@@ -935,6 +989,8 @@ function runPage($script, $get, $cookie = []) {
 [$st, $html] = runPage("product.php", ["code" => "9001"]);
 check("product: renders", $st === 200 && strpos($html, '<h3 class="card-title mb-0">Oat Drink</h3>') !== false);
 structureChecks("product page", $html);
+check("product: data last updated and report link", strpos($html, "Data last updated") !== false
+    && strpos($html, 'href="/contact.php?about=product&amp;item=Oat%20Drink%20%289001%29"') !== false);
 check("product: links up to brand", strpos($html, 'href="brand.php?brand=Prodco"') !== false);
 check("product: own dimensions have single working", substr_count($html, 'derivation-single') === 3);
 check("product: nutrition grade and points", preg_match('~Grade: B\s*= 8 points~', $html) === 1);
@@ -1192,7 +1248,7 @@ query("DELETE FROM brands WHERE name LIKE 'Own Test %'");
 section("visual refresh");
 $o = renderTo("about.php", ["title" => "About"]);
 check("layout links the site stylesheet after Bootstrap",
-    strpos($o, '<link href="/assets/site.css" rel="stylesheet">') !== false
+    preg_match('~<link href="/assets/site\.css\?v=[0-9a-f]{12}" rel="stylesheet">~', $o) === 1
     && strpos($o, 'bootstrap.min.css') < strpos($o, '/assets/site.css'));
 check("stylesheet exists", is_file(__DIR__ . "/../public/assets/site.css"));
 check("footer keeps the Open Food Facts attribution", strpos($o, 'Open Database Licence (ODbL)') !== false);
@@ -1243,7 +1299,7 @@ foreach (array_unique($m[1]) as $hex) {
     if ($sat > 0.15 && !($hue >= 190 && $hue <= 250)) { $offenders[] = "#$hex"; }
 }
 check("no red, amber or green in the chrome", $offenders === []) || print("   " . implode(", ", $offenders) . "\n");
-check("score-bar uses the score ramp", strpos($css, '.score-bar--danger    > span { background: var(--score-danger-bar); }') !== false);
+check("score-bar uses the score ramp", strpos($css, '.score-bar--danger    rect { fill: var(--score-danger-bar); }') !== false);
 $o = renderTo("about.php", ["title" => "About"]);
 check("wordmark is the neutral tick mark", strpos($o, '<circle cx="12" cy="12" r="9.5"') !== false && strpos($o, 'M20 4c-7.5') === false);
 
@@ -1375,7 +1431,7 @@ check("product: photo credit links to the OFF page", strpos($html, 'Photo:') !==
     && strpos($html, '<a href="https://world.openfoodfacts.org/product/D001" target="_blank" rel="noopener noreferrer">Open Food Facts contributors</a>,') !== false
     && strpos($html, 'CC BY-SA 4.0') !== false);
 [$st, $html] = runPage("product.php", ["code" => "D003"]);
-check("product without photo: placeholder, no img, no credit", $st === 200 && strpos($html, 'thumb thumb--empty') !== false
+check("product without photo: placeholder, no img, no credit", $st === 200 && preg_match('~thumb thumb--\d+ thumb--empty~', $html) === 1
     && strpos($html, '<img ') === false && strpos($html, 'Photo:') === false);
 // runs one statement as the importer's database user (the site's user cannot write products)
 function asImporter($sql) {
@@ -1398,7 +1454,7 @@ check("brand: header shows its most scanned product's photo", strpos($html, 'src
 check("brand: product table thumbnails", substr_count($html, 'loading="lazy"') >= 3);
 [$st, $html] = runPage("brand.php", ["brand" => "Dump Delta"]);
 $deltaHeader = substr($html, 0, strpos($html, 'Why this score'));
-check("brand without photo renders with placeholder", $st === 200 && strpos($deltaHeader, 'thumb thumb--empty') !== false
+check("brand without photo renders with placeholder", $st === 200 && preg_match('~thumb thumb--\d+ thumb--empty~', $deltaHeader) === 1
     && strpos($deltaHeader, '<img ') === false);
 check("brand without photo: other brands keep theirs", strpos($html, 'src="' . $img("D002")["image_url"] . '"') !== false);
 [$st, $html] = runPage("search.php", ["q" => "Alpha"]);
@@ -1408,11 +1464,545 @@ check("search: brand and product thumbnails", strpos($html, 'src="' . $img("D002
 check("home: brand photo passed to the list", strpos($html, str_replace("/", "\\/", $img("D002")["image_url"])) !== false
     || strpos($html, $img("D002")["image_url"]) !== false);
 $o = renderTo("about.php", ["title" => "About"]);
-check("about: photo licence and privacy note", strpos($o, 'CC BY-SA 4.0') !== false && strpos($o, 'sees your IP address') !== false);
+check("about: points to sources and privacy instead of repeating them", strpos($o, 'href="/sources.php"') !== false
+    && strpos($o, 'href="/privacy.php"') !== false && strpos($o, 'sees your IP address') === false);
+$o2 = renderTo("sources.php", ["title" => "Data Sources"]);
+check("sources: photo licence and IP note", strpos($o2, 'CC BY-SA 4.0') !== false && strpos($o2, 'sees your IP address') !== false);
+$o2 = renderTo("privacy.php", ["title" => "Privacy"]);
+check("privacy: photo IP note", strpos($o2, 'Open Food Facts sees') !== false && strpos($o2, 'images.openfoodfacts.org') !== false);
 check("footer: photo credit", strpos($o, 'Product photos by Open Food Facts') !== false);
 
 query("DELETE FROM brands WHERE name LIKE 'Dump %'");
 @unlink($gz);
+
+
+// ---------- over real HTTP ----------
+// The checks below start PHP's built-in server on the public/ directory and
+// talk to it over a socket, so status codes and headers are the real thing.
+// Each distinct environment gets its own server.
+
+function http_server($env = []) {
+    static $servers = [];
+    $base = [
+        "DB_NAME" => getenv("DB_NAME"), "DB_USER" => getenv("DB_USER"), "DB_PASSWORD" => getenv("DB_PASSWORD"),
+        "APP_DEBUG" => "0", "PATH" => getenv("PATH"),
+    ];
+    $env = array_merge($base, $env);
+    ksort($env);
+    $key = md5(json_encode($env));
+    if (isset($servers[$key])) { return $servers[$key]["port"]; }
+    $sock = stream_socket_server("tcp://127.0.0.1:0");
+    $port = (int) substr(strrchr(stream_socket_get_name($sock, false), ":"), 1);
+    fclose($sock);
+    $proc = proc_open([PHP_BINARY, "-S", "127.0.0.1:$port", "-t", __DIR__ . "/../public", __DIR__ . "/router.php"],
+        [0 => ["file", "/dev/null", "r"], 1 => ["file", "/dev/null", "w"], 2 => ["file", "/dev/null", "w"]],
+        $pipes, null, $env);
+    for ($i = 0; $i < 100; $i++) {
+        $c = @stream_socket_client("tcp://127.0.0.1:$port", $errno, $errstr, 0.1);
+        if ($c) { fclose($c); break; }
+        usleep(50000);
+    }
+    $servers[$key] = ["port" => $port, "proc" => $proc];
+    register_shutdown_function(function () use ($proc) { proc_terminate($proc); });
+    return $port;
+}
+
+/**
+ * Raw HTTP/1.0 request. Returns [status, headers (lower-case name => [values]), body].
+ */
+function http_req($port, $path, $opts = []) {
+    $method = $opts["method"] ?? "GET";
+    $headers = array_merge(["Host" => "localhost"], $opts["headers"] ?? []);
+    $body = $opts["body"] ?? null;
+    if (is_array($body)) {
+        $body = http_build_query($body);
+        $headers["Content-Type"] = "application/x-www-form-urlencoded";
+    }
+    if ($body !== null) { $headers["Content-Length"] = strlen($body); }
+    $req = "$method $path HTTP/1.0\r\n";
+    foreach ($headers as $k => $v) { $req .= "$k: $v\r\n"; }
+    $req .= "Connection: close\r\n\r\n" . ($body ?? "");
+    $c = stream_socket_client("tcp://127.0.0.1:$port", $errno, $errstr, 5);
+    if (!$c) { return [0, [], ""]; }
+    stream_set_timeout($c, 20);
+    fwrite($c, $req);
+    $raw = stream_get_contents($c);
+    fclose($c);
+    [$head, $content] = array_pad(explode("\r\n\r\n", $raw, 2), 2, "");
+    $lines = explode("\r\n", $head);
+    $status = preg_match('~^HTTP/\S+ (\d{3})~', array_shift($lines), $m) ? (int) $m[1] : 0;
+    $hs = [];
+    foreach ($lines as $line) {
+        [$k, $v] = array_pad(explode(":", $line, 2), 2, "");
+        $hs[strtolower(trim($k))][] = trim($v);
+    }
+    return [$status, $hs, $content];
+}
+
+function hdr($hs, $name) { return $hs[strtolower($name)][0] ?? null; }
+
+// a fresh made-up visitor address per call, so rate limit buckets never
+// leak between checks
+function fake_ip() { static $n = 0; $n++; return "198.51." . intdiv($n, 250) . "." . ($n % 250 + 1); }
+
+// rows read as the importer, which may read the log tables the site only writes
+function importerRows($sql, ...$params) {
+    $env = array_merge(getenv(), ["DB_USER" => getenv("IMPORT_DB_USER") ?: "ethicalbuy_import",
+        "DB_PASSWORD" => getenv("IMPORT_DB_PASSWORD") ?: "ethicalbuy_import_dev",
+        "T_SQL" => $sql, "T_PARAMS" => json_encode($params)]);
+    $code = 'require ' . var_export(__DIR__ . "/../includes/config.php", true)
+          . '; echo json_encode(query(getenv("T_SQL"), ...json_decode(getenv("T_PARAMS"), true)));';
+    $proc = proc_open([PHP_BINARY, "-r", $code], [1 => ["pipe", "w"], 2 => ["pipe", "w"]], $pipes, null, $env);
+    $out = stream_get_contents($pipes[1]);
+    proc_close($proc);
+    return json_decode($out, true);
+}
+
+// counters from an earlier run would otherwise trip the limits below
+check("test setup: rate limit counters cleared", asImporter("DELETE FROM rate_limits"));
+
+section("HTTP: unknown paths are real 404s");
+$port = http_server();
+foreach (["/nope.php", "/nope", "/brand.php/extra", "/includes/config.php", "/assets/nope.css.php"] as $p) {
+    [$st, $hs, $body] = http_req($port, $p);
+    check("$p -> 404", $st === 404);
+}
+[$st, $hs, $body] = http_req($port, "/nope.php");
+check("404 page is the friendly page in the site's layout", strpos($body, "Page not found") !== false
+    && strpos($body, "site-nav") !== false && strpos($body, "site-footer") !== false);
+check("404 page reveals no paths", strpos($body, __DIR__) === false && strpos($body, "includes/") === false);
+[$st, $hs, $body] = http_req($port, "/");
+check("/ -> 200", $st === 200);
+[$st, $hs, $body] = http_req($port, "/index.php");
+check("/index.php -> 200", $st === 200);
+[$st, $hs, $body] = http_req($port, "/about.php");
+check("/about.php -> 200", $st === 200);
+[$st, $hs, $body] = http_req($port, "/brand.php");
+check("brand.php with no brand -> 404", $st === 404);
+
+section("HTTP: database unreachable");
+$down = http_server(["DB_HOST" => "127.0.0.1", "DB_NAME" => "no_such_db_here", "DB_PASSWORD" => "wrong"]);
+foreach (["/", "/search.php?q=milk", "/brand.php?brand=Valley+Fresh"] as $p) {
+    [$st, $hs, $body] = http_req($down, $p);
+    check("$p with no database -> 503 maintenance page", $st === 503 && strpos($body, "Down for maintenance") !== false);
+    check("$p with no database leaks nothing", stripos($body, "SQLSTATE") === false && stripos($body, "PDO") === false
+        && stripos($body, "no_such_db_here") === false);
+}
+
+
+section("HTTP: admin host restriction and login throttle");
+$adminHash = password_hash("correct horse", PASSWORD_DEFAULT);
+$adminEnv = ["ADMIN_USER" => "dale", "ADMIN_PASSWORD_HASH" => $adminHash,
+             "ADMIN_ALLOWED_HOSTS" => "ethicalbuy.contelo.ai, localhost", "TRUST_PROXY" => "1"];
+$ap = http_server($adminEnv);
+$viaProxy = function ($ip, $host, $extra = []) {
+    return array_merge(["Host" => $host, "CF-Connecting-IP" => $ip, "X-Forwarded-Proto" => "https"], $extra);
+};
+foreach (["/admin/", "/admin", "/admin/index.php", "/admin/edit.php", "/admin/nope.php"] as $p) {
+    [$st, $hs, $body] = http_req($ap, $p, ["headers" => $viaProxy(fake_ip(), "ethicalbuy.net")]);
+    check("$p on the public host -> 404", $st === 404);
+    check("$p on the public host: no login prompt", hdr($hs, "WWW-Authenticate") === null);
+}
+[$st, $hs] = http_req($ap, "/admin/", ["headers" => $viaProxy(fake_ip(), "ETHICALBUY.CONTELO.AI:443")]);
+check("/admin/ on the allowed host prompts for auth", $st === 401 && strpos((string) hdr($hs, "WWW-Authenticate"), "Basic") === 0);
+check("admin responses are no-store", hdr($hs, "Cache-Control") === "no-store");
+$good = "Basic " . base64_encode("dale:correct horse");
+[$st, $hs, $body] = http_req($ap, "/admin/", ["headers" => $viaProxy(fake_ip(), "ethicalbuy.contelo.ai", ["Authorization" => $good])]);
+check("right credentials on the allowed host -> 200", $st === 200 && hdr($hs, "Cache-Control") === "no-store");
+[$st] = http_req($ap, "/admin/", ["headers" => ["Host" => "ethicalbuy.contelo.ai", "X-Forwarded-Proto" => "http", "Authorization" => $good]]);
+check("admin over plain HTTP from the proxy -> 403", $st === 403);
+$open = http_server(["ADMIN_USER" => "dale", "ADMIN_PASSWORD_HASH" => $adminHash]);
+[$st] = http_req($open, "/admin/", ["headers" => ["Host" => "anything.example"]]);
+check("ADMIN_ALLOWED_HOSTS unset -> no host restriction (local development)", $st === 401);
+
+$attacker = fake_ip();
+$bad = "Basic " . base64_encode("dale:wrong guess");
+$statuses = [];
+for ($i = 0; $i < 5; $i++) {
+    [$statuses[]] = http_req($ap, "/admin/", ["headers" => $viaProxy($attacker, "ethicalbuy.contelo.ai", ["Authorization" => $bad])]);
+}
+check("first five failures -> 401", $statuses === [401, 401, 401, 401, 401]);
+[$st, $hs] = http_req($ap, "/admin/", ["headers" => $viaProxy($attacker, "ethicalbuy.contelo.ai", ["Authorization" => $bad])]);
+check("sixth attempt -> 429 with Retry-After", $st === 429 && (int) hdr($hs, "Retry-After") > 0 && (int) hdr($hs, "Retry-After") <= 900);
+[$st] = http_req($ap, "/admin/", ["headers" => $viaProxy($attacker, "ethicalbuy.contelo.ai", ["Authorization" => $good])]);
+check("locked out even with the right password", $st === 429);
+[$st] = http_req($ap, "/admin/", ["headers" => $viaProxy(fake_ip(), "ethicalbuy.contelo.ai", ["Authorization" => $good])]);
+check("another address is not affected", $st === 200);
+$logged = importerRows("SELECT message_text FROM message_log WHERE module = 'admin' ORDER BY id DESC LIMIT 10") ?: [];
+$logText = implode("\n", array_column($logged, "message_text"));
+check("failed logins are logged with a truncated address", strpos($logText, "failed login from 198.51.") !== false
+    && preg_match('~198\.51\.\d+\.0/24~', $logText) === 1);
+check("log never holds the username or password tried", strpos($logText, "wrong guess") === false && strpos($logText, "dale") === false);
+
+section("client_ip: CF-Connecting-IP only from loopback with TRUST_PROXY");
+$saved = $_SERVER;
+$_SERVER["HTTP_CF_CONNECTING_IP"] = "203.0.113.50";
+$_SERVER["REMOTE_ADDR"] = "127.0.0.1";
+putenv("TRUST_PROXY=1");
+check("honoured from loopback with TRUST_PROXY=1", client_ip() === "203.0.113.50");
+$_SERVER["REMOTE_ADDR"] = "::1";
+check("honoured from IPv6 loopback", client_ip() === "203.0.113.50");
+$_SERVER["REMOTE_ADDR"] = "198.51.100.7";
+check("ignored from a remote peer", client_ip() === "198.51.100.7");
+$_SERVER["REMOTE_ADDR"] = "127.0.0.1";
+putenv("TRUST_PROXY=0");
+check("ignored with TRUST_PROXY=0", client_ip() === "127.0.0.1");
+putenv("TRUST_PROXY=1");
+$_SERVER["HTTP_CF_CONNECTING_IP"] = "not-an-ip, 1.2.3.4";
+check("garbage header falls back to the peer", client_ip() === "127.0.0.1");
+$_SERVER["HTTP_CF_CONNECTING_IP"] = "2001:db8:abcd:12::1";
+check("IPv6 visitor accepted", client_ip() === "2001:db8:abcd:12::1");
+putenv("TRUST_PROXY=0");
+$_SERVER = $saved;
+check("truncated IPv4 is the /24", truncated_ip("203.0.113.77") === "203.0.113.0/24");
+check("truncated IPv6 is the /48", truncated_ip("2001:db8:abcd:12::1") === "2001:db8:abcd::/48");
+check("truncated garbage", truncated_ip("nope") === "unknown");
+check("page_number clamps", page_number("0") === 1 && page_number("7") === 7 && page_number("999999") === PAGE_MAX
+    && page_number("99999999999999999999") === PAGE_MAX && page_number("-3") === 1 && page_number("2abc") === 1);
+check("product codes", is_product_code("5000159484695") && !is_product_code("1' OR 1=1") && !is_product_code(str_repeat("1", 101)));
+
+section("HTTP: contact form abuse resistance");
+$cp = http_server(["TRUST_PROXY" => "1", "CONTACT_MIN_SECONDS" => "1"]);
+// fetch the form as a given visitor: returns [cookie, token, stamp]
+$openForm = function ($port, $ip, $query = "") {
+    [$st, $hs, $body] = http_req($port, "/contact.php$query", ["headers" => ["CF-Connecting-IP" => $ip]]);
+    $cookie = "";
+    foreach ($hs["set-cookie"] ?? [] as $c) { if (stripos($c, "PHPSESSID=") === 0) { $cookie = explode(";", $c)[0]; } }
+    preg_match('~name="csrf_token" value="([0-9a-f]+)"~', $body, $t);
+    preg_match('~name="form_stamp" value="([^"]+)"~', $body, $f);
+    return [$cookie, $t[1] ?? "", $f[1] ?? "", $body, $hs];
+};
+$post = function ($port, $ip, $cookie, $fields) {
+    return http_req($port, "/contact.php", ["method" => "POST", "body" => $fields,
+        "headers" => ["CF-Connecting-IP" => $ip, "Cookie" => $cookie]]);
+};
+$count = function () { return (int) (importerRows("SELECT COUNT(*) AS n FROM contact_messages")[0]["n"] ?? -1); };
+$fields = ["name" => "Sam Tester", "email" => "sam@example.com", "message" => "The owner of Valley Fresh changed last year."];
+
+$ip = fake_ip();
+[$cookie, $token, $stamp, $body, $hs] = $openForm($cp, $ip);
+check("form served with a token and a stamp", $token !== "" && $stamp !== "" && $cookie !== "");
+check("form page is no-store", hdr($hs, "Cache-Control") === "no-store");
+sleep(1);
+$before = $count();
+[$st, $hs, $body] = $post($cp, $ip, $cookie, $fields + ["form_stamp" => $stamp]);
+check("missing CSRF token rejected", $st === 200 && strpos($body, "session expired") !== false && $count() === $before);
+[$st, $hs, $body] = $post($cp, $ip, $cookie, $fields + ["form_stamp" => $stamp, "csrf_token" => str_repeat("a", 64)]);
+check("wrong CSRF token rejected", strpos($body, "session expired") !== false && $count() === $before);
+[$st, $hs, $body] = $post($cp, $ip, $cookie, $fields + ["form_stamp" => $stamp, "csrf_token" => $token, "website" => "http://spam.example"]);
+check("filled honeypot looks sent but stores nothing", $st === 302 && strpos((string) hdr($hs, "Location"), "sent=1") !== false && $count() === $before);
+
+$ip = fake_ip();
+[$cookie, $token, $stamp] = $openForm($cp, $ip);
+[$st, $hs, $body] = $post($cp, $ip, $cookie, $fields + ["form_stamp" => $stamp, "csrf_token" => $token]);
+check("instant submission (under the minimum time) stores nothing", $st === 302 && $count() === $before);
+[$st, $hs, $body] = $post($cp, $ip, $cookie, $fields + ["form_stamp" => "1700000000." . str_repeat("0", 64), "csrf_token" => $token]);
+check("forged stamp stores nothing", $st === 302 && $count() === $before);
+
+$ip = fake_ip();
+[$cookie, $token, $stamp] = $openForm($cp, $ip);
+sleep(1);
+[$st, $hs, $body] = $post($cp, $ip, $cookie, array_merge($fields, ["message" => str_repeat("x", 5001), "form_stamp" => $stamp, "csrf_token" => $token]));
+check("oversize message rejected", $st === 200 && strpos($body, "under 5000 characters") !== false && $count() === $before);
+[$st, $hs, $body] = $post($cp, $ip, $cookie, array_merge($fields, ["email" => "sam@example.com\r\nBcc: victim@example.com", "form_stamp" => $stamp, "csrf_token" => $token]));
+check("header injection rejected", $st === 200 && strpos($body, "valid email address") !== false && $count() === $before);
+[$st, $hs, $body] = $post($cp, $ip, $cookie, array_merge($fields, ["about" => "brand", "item" => "Valley Fresh", "form_stamp" => $stamp, "csrf_token" => $token]));
+check("good message saved, then redirected", $st === 302 && $count() === $before + 1);
+$saved = importerRows("SELECT message FROM contact_messages ORDER BY id DESC LIMIT 1")[0]["message"] ?? "";
+check("problem report stored with what it is about", strpos($saved, "Problem report about brand: Valley Fresh") === 0);
+$logged = importerRows("SELECT message_text FROM message_log WHERE module = 'contact' ORDER BY id DESC LIMIT 1")[0]["message_text"] ?? "";
+check("contact log holds the /24, not the address", $logged === "message received from " . truncated_ip($ip) && strpos($logged, $ip) === false);
+[$st, $hs, $body] = http_req($cp, "/contact.php?about=brand&item=" . rawurlencode('<b>Valley</b>" autofocus'));
+check("report link pre-fills, escaped", strpos($body, '&lt;b&gt;Valley&lt;/b&gt;&quot; autofocus') !== false && strpos($body, '<b>Valley') === false);
+
+// rate limit: three an hour
+$ip = fake_ip();
+$codes = [];
+for ($i = 0; $i < 4; $i++) {
+    [$cookie, $token, $stamp] = $openForm($cp, $ip);
+    if ($i === 0) { sleep(1); }
+    [$codes[], $hs, $body] = $post($cp, $ip, $cookie, $fields + ["form_stamp" => $stamp, "csrf_token" => $token]);
+}
+check("three messages an hour, then 429", $codes === [302, 302, 302, 429]);
+check("contact 429 is calm and has Retry-After", strpos($body, "Please wait a while") !== false && (int) hdr($hs, "Retry-After") > 0);
+[$st] = $post($cp, fake_ip(), $cookie, $fields + ["form_stamp" => $stamp, "csrf_token" => $token]);
+check("another visitor is not limited", $st !== 429);
+check("test setup: counters cleared", asImporter("DELETE FROM rate_limits WHERE bucket = 'contact'"));
+
+section("HTTP: browse rate limits");
+$bp = http_server(["TRUST_PROXY" => "1", "RATE_BROWSE_PER_MINUTE" => "5"]);
+foreach (["/search.php?q=milk", "/", "/brand.php?brand=Valley+Fresh", "/product.php?code=9001"] as $p) {
+    $ip = fake_ip();
+    $codes = [];
+    for ($i = 0; $i < 6; $i++) {
+        [$codes[], $hs] = http_req($bp, $p, ["headers" => ["CF-Connecting-IP" => $ip]]);
+    }
+    check("$p: five allowed, the sixth is 429", array_slice($codes, 0, 5) === array_fill(0, 5, $codes[0]) && $codes[0] !== 429 && $codes[5] === 429);
+    check("$p: 429 carries Retry-After", (int) hdr($hs, "Retry-After") >= 1 && (int) hdr($hs, "Retry-After") <= 60);
+}
+[$st] = http_req($bp, "/about.php", ["headers" => ["CF-Connecting-IP" => $ip]]);
+check("static pages are not browse-limited", $st === 200);
+[$st] = http_req($bp, "/search.php?q=milk", ["headers" => ["CF-Connecting-IP" => fake_ip()]]);
+check("normal use from another visitor is fine", $st === 200);
+$spoof = http_server(["TRUST_PROXY" => "0", "RATE_BROWSE_PER_MINUTE" => "3"]);
+$codes = [];
+for ($i = 0; $i < 4; $i++) {
+    [$codes[]] = http_req($spoof, "/search.php?q=x", ["headers" => ["CF-Connecting-IP" => fake_ip()]]);
+}
+check("with TRUST_PROXY=0 a rotating CF-Connecting-IP does not dodge the limit", $codes[3] === 429);
+check("test setup: counters cleared", asImporter("DELETE FROM rate_limits"));
+
+section("HTTP: input caps");
+[$st, $hs, $body] = http_req($port, "/search.php?q=" . str_repeat("a", 300));
+check("long search query is cut to 100 characters", $st === 200 && strpos($body, str_repeat("a", 101)) === false && strpos($body, str_repeat("a", 100)) !== false);
+[$st] = http_req($port, "/search.php?q=milk&page=99999999999");
+check("absurd page number is harmless", $st === 200);
+[$st] = http_req($port, "/product.php?code=" . rawurlencode("1' OR '1'='1"));
+check("malformed product code -> 404", $st === 404);
+[$st] = http_req($port, "/brand.php?brand=" . str_repeat("b", 151));
+check("over-long brand name -> 404", $st === 404);
+[$st] = http_req($port, "/brand.php?brand=" . rawurlencode("Valley\nFresh"));
+check("brand name with a control character -> 404", $st === 404);
+[$st] = http_req($port, "/search.php?q[]=x&page[]=2");
+check("array-valued parameters are harmless", $st === 200);
+
+section("bin/purge-messages.php");
+$purge = function ($args = [], $env = []) {
+    $env = array_merge(getenv(), ["DB_USER" => getenv("IMPORT_DB_USER") ?: "ethicalbuy_import",
+        "DB_PASSWORD" => getenv("IMPORT_DB_PASSWORD") ?: "ethicalbuy_import_dev"], $env);
+    $proc = proc_open(array_merge([PHP_BINARY, __DIR__ . "/../bin/purge-messages.php"], $args),
+        [1 => ["pipe", "w"], 2 => ["pipe", "w"]], $pipes, null, $env);
+    $out = stream_get_contents($pipes[1]) . stream_get_contents($pipes[2]);
+    return [proc_close($proc), $out];
+};
+$marker = "purge-test-" . bin2hex(random_bytes(4));
+query("INSERT INTO contact_messages (name, email, message, created_at) VALUES (?, 'a@example.com', 'old', NOW() - INTERVAL 200 DAY)", $marker);
+query("INSERT INTO contact_messages (name, email, message, created_at) VALUES (?, 'a@example.com', 'edge', NOW() - INTERVAL 179 DAY)", $marker);
+query("INSERT INTO contact_messages (name, email, message) VALUES (?, 'a@example.com', 'new')", $marker);
+query("INSERT INTO message_log (module, message_text, created_at) VALUES ('purge-test', ?, NOW() - INTERVAL 400 DAY)", $marker);
+query("INSERT INTO message_log (module, message_text) VALUES ('purge-test', ?)", $marker);
+$mine = function () use ($marker) {
+    return array_column(importerRows("SELECT message FROM contact_messages WHERE name = ? ORDER BY id", $marker) ?: [], "message");
+};
+$logs = function () use ($marker) {
+    return count(importerRows("SELECT id FROM message_log WHERE message_text = ?", $marker) ?: []);
+};
+[$rc, $out] = $purge();
+check("dry run: exit 0 and lists what it would delete", $rc === 0 && strpos($out, "Dry run") !== false
+    && preg_match('~contact_messages: [1-9]\d* row~', $out) === 1 && strpos($out, "Nothing deleted") !== false);
+check("dry run deletes nothing", $mine() === ["old", "edge", "new"] && $logs() === 2);
+check("dry run never prints message contents", strpos($out, $marker) === false);
+[$rc, $out] = $purge(["--apply"]);
+check("--apply: exit 0", $rc === 0 && strpos($out, "deleted") !== false);
+check("--apply deletes only messages older than 180 days", $mine() === ["edge", "new"]);
+check("--apply deletes only old log rows", $logs() === 1);
+[$rc, $out] = $purge(["--apply"], ["MESSAGE_RETENTION_DAYS" => "30"]);
+check("MESSAGE_RETENTION_DAYS is honoured", $mine() === ["new"] && strpos($out, "30 days") !== false);
+[$rc, $out] = $purge(["--apply"], ["DB_USER" => "ethicalbuy", "DB_PASSWORD" => getenv("DB_PASSWORD")]);
+check("the site's own account cannot purge", $rc === 1 && $mine() === ["new"]);
+asImporter("DELETE FROM contact_messages WHERE name = '$marker'");
+asImporter("DELETE FROM message_log WHERE message_text = '$marker'");
+
+section("HTTP: security headers on every page type");
+$hp = http_server();
+$pageTypes = ["/", "/search.php", "/search.php?q=milk", "/brand.php?brand=Valley+Fresh", "/priorities.php",
+    "/about.php", "/contact.php", "/nope", "/brand.php?brand=No+Such+Brand", "/admin/"];
+foreach ($pageTypes as $p) {
+    [$st, $hs, $body] = http_req($hp, $p);
+    $csp = (string) hdr($hs, "Content-Security-Policy");
+    check("$p ($st): CSP", strpos($csp, "default-src 'self'") === 0 && strpos($csp, "script-src 'self';") !== false
+        && strpos($csp, "style-src 'self';") !== false && strpos($csp, "frame-ancestors 'none'") !== false
+        && strpos($csp, "img-src 'self' data: https://images.openfoodfacts.org https://images.openfoodfacts.net;") !== false
+        && strpos($csp, "base-uri 'self'") !== false && strpos($csp, "form-action 'self'") !== false
+        && strpos($csp, "unsafe-inline") === false && strpos($csp, "challenges.cloudflare.com") === false);
+    check("$p: HSTS without preload", hdr($hs, "Strict-Transport-Security") === "max-age=31536000");
+    check("$p: nosniff, referrer, COOP", hdr($hs, "X-Content-Type-Options") === "nosniff"
+        && hdr($hs, "Referrer-Policy") === "strict-origin-when-cross-origin"
+        && hdr($hs, "Cross-Origin-Opener-Policy") === "same-origin");
+    $pp = (string) hdr($hs, "Permissions-Policy");
+    check("$p: Permissions-Policy", strpos($pp, "camera=()") !== false && strpos($pp, "microphone=()") !== false
+        && strpos($pp, "geolocation=()") !== false && strpos($pp, "payment=()") !== false);
+    check("$p: no X-Powered-By", hdr($hs, "X-Powered-By") === null);
+    check("$p: no inline script or style in the markup", preg_match('~<script(?![^>]*(\bsrc=|type="application/json"))[^>]*>~i', $body) === 0
+        && stripos($body, " style=") === false && stripos($body, "<style") === false && stripos($body, "javascript:") === false
+        && preg_match('~\son[a-z]+="~i', $body) === 0);
+}
+[$st, $hs, $body] = http_req($hp, "/");
+check("public pages set no cookie", !isset($hs["set-cookie"]));
+check("stylesheet fingerprinted", preg_match('~/assets/site\.css\?v=[0-9a-f]{12}~', $body) === 1);
+[$st, $hs] = http_req($hp, "/contact.php");
+$sc = implode("\n", $hs["set-cookie"] ?? []);
+check("session cookie: HttpOnly, SameSite=Lax", stripos($sc, "HttpOnly") !== false && stripos($sc, "SameSite=Lax") !== false);
+$sp = http_server(["TRUST_PROXY" => "1"]);
+[$st, $hs] = http_req($sp, "/contact.php", ["headers" => ["X-Forwarded-Proto" => "https"]]);
+check("session cookie Secure behind the HTTPS proxy", stripos(implode("\n", $hs["set-cookie"] ?? []), "secure") !== false);
+[$st, $hs, $body] = http_req($sp, "/priorities.php", ["headers" => ["X-Forwarded-Proto" => "https"]]);
+preg_match('~name="csrf_token" value="([0-9a-f]+)"~', $body, $t);
+$cookie = explode(";", ($hs["set-cookie"] ?? [""])[0])[0];
+[$st, $hs] = http_req($sp, "/priorities.php", ["method" => "POST", "headers" => ["X-Forwarded-Proto" => "https", "Cookie" => $cookie],
+    "body" => ["csrf_token" => $t[1] ?? "", "w_editorial" => "5"]]);
+$pc = "";
+foreach ($hs["set-cookie"] ?? [] as $c) { if (stripos($c, "priorities=") === 0) { $pc = $c; } }
+check("priorities cookie: Secure, HttpOnly, SameSite=Lax, path /", stripos($pc, "secure") !== false && stripos($pc, "httponly") !== false
+    && stripos($pc, "samesite=lax") !== false && stripos($pc, "path=/") !== false);
+check("over-long priorities cookie ignored", parse_weights(str_repeat("editorial=5&", 40)) === default_weights());
+check("priorities cookie still clamped", parse_weights("editorial=99&nutrition=-4&bogus=3")["editorial"] === WEIGHT_MAX
+    && parse_weights("editorial=99&nutrition=-4")["nutrition"] === WEIGHT_MIN && !isset(parse_weights("bogus=3")["bogus"]));
+$tp = http_server(["TURNSTILE_SITE_KEY" => "1x00000000000000000000AA", "TURNSTILE_SECRET" => "1x0000000000000000000000000000000AA"]);
+[$st, $hs, $body] = http_req($tp, "/contact.php");
+$csp = (string) hdr($hs, "Content-Security-Policy");
+check("Turnstile on: CSP allows only Cloudflare's challenge host, for script and frame", strpos($csp, "script-src 'self' https://challenges.cloudflare.com;") !== false
+    && strpos($csp, "frame-src https://challenges.cloudflare.com") !== false);
+check("Turnstile on: widget rendered", strpos($body, 'class="cf-turnstile') !== false);
+check("ads off by default: no extra CSP hosts", csp_ads_sources() === [] && !ads_enabled());
+
+section("HTTP: indexing switch, robots.txt, metadata");
+$pageTypes = ["/", "/search.php", "/brand.php?brand=Valley+Fresh", "/priorities.php", "/about.php", "/contact.php"];
+$soft = http_server(["SITE_URL" => "https://ethicalbuy.net"]);
+foreach ($pageTypes as $p) {
+    [$st, $hs, $body] = http_req($soft, $p);
+    check("SITE_INDEXABLE unset: $p has noindex header and meta", hdr($hs, "X-Robots-Tag") === "noindex, nofollow"
+        && strpos($body, '<meta name="robots" content="noindex, nofollow">') !== false);
+}
+[$st, $hs, $body] = http_req($soft, "/robots.txt");
+check("SITE_INDEXABLE unset: robots.txt disallows all", $st === 200 && strpos((string) hdr($hs, "Content-Type"), "text/plain") === 0
+    && preg_match('~^User-agent: \*\nDisallow: /\n$~m', $body) === 1 && strpos($body, "Sitemap:") === false);
+$live = http_server(["SITE_URL" => "https://ethicalbuy.net/", "SITE_INDEXABLE" => "1"]);
+foreach ($pageTypes as $p) {
+    [$st, $hs, $body] = http_req($live, $p);
+    check("SITE_INDEXABLE=1: $p is indexable", hdr($hs, "X-Robots-Tag") === null && strpos($body, 'name="robots"') === false);
+    check("$p: title, description, canonical, Open Graph", preg_match('~<title>[^<]+ \| Ethical Buy</title>|<title>Ethical Buy</title>~', $body) === 1
+        && preg_match('~<meta name="description" content="[^"]{20,}">~', $body) === 1
+        && preg_match('~<link rel="canonical" href="https://ethicalbuy\.net/[^"]*">~', $body) === 1
+        && strpos($body, '<meta property="og:title"') !== false && strpos($body, '<meta property="og:url" content="https://ethicalbuy.net/') !== false);
+}
+[$st, $hs, $body] = http_req($live, "/search.php?q=milk");
+check("SITE_INDEXABLE=1: search results still noindex", strpos($body, '<meta name="robots" content="noindex, nofollow">') !== false);
+[$st, $hs, $body] = http_req($live, "/brand.php?brand=Valley+Fresh&utm=x");
+check("brand canonical ignores stray parameters", strpos($body, '<link rel="canonical" href="https://ethicalbuy.net/brand.php?brand=Valley%20Fresh">') !== false);
+check("brand description built from the page", preg_match('~<meta name="description" content="Valley Fresh, owned by [^"]+">~', $body) === 1);
+[$st, $hs, $body] = http_req($live, "/nope");
+check("SITE_INDEXABLE=1: 404 page is still noindex", $st === 404 && hdr($hs, "X-Robots-Tag") === "noindex, nofollow");
+[$st, $hs, $body] = http_req($live, "/robots.txt");
+check("SITE_INDEXABLE=1: robots.txt allows crawling and names the sitemap", strpos($body, "Allow: /") !== false
+    && strpos($body, "Disallow: /\n") === false && strpos($body, "Sitemap: https://ethicalbuy.net/sitemap.xml") !== false);
+$evilTitle = renderTo("about.php", ["title" => '"><script>x</script>', "description" => '"><b>d</b>', "canonical" => '/a"b']);
+check("metadata escaped", strpos($evilTitle, '<script>x') === false && strpos($evilTitle, '"><b>') === false
+    && strpos($evilTitle, 'href="https://ethicalbuy.net/a&quot;b"') !== false);
+check("meta_description trims at a word", mb_strlen(meta_description(str_repeat("word ", 80))) <= 155
+    && substr(meta_description(str_repeat("word ", 80)), -3) === "...");
+
+section("HTTP: sitemaps");
+foreach (glob(sys_get_temp_dir() . "/ethicalbuy-*.xml") as $f) { @unlink($f); }
+$sm = http_server(["SITE_URL" => "http://localhost", "RATE_BROWSE_PER_MINUTE" => "100000"]);
+[$st, $hs, $body] = http_req($sm, "/sitemap.xml");
+check("sitemap.xml is a sitemap index", $st === 200 && strpos((string) hdr($hs, "Content-Type"), "application/xml") === 0
+    && strpos($body, "<sitemapindex") !== false && hdr($hs, "Cache-Control") === "public, max-age=3600");
+$doc = simplexml_load_string($body);
+$children = $doc ? array_map("strval", iterator_to_array($doc->xpath("//*[local-name()='loc']"), false)) : [];
+check("index lists pages, brands and products", in_array("http://localhost/sitemap-pages.xml", $children, true)
+    && in_array("http://localhost/sitemap-brands.xml", $children, true) && in_array("http://localhost/sitemap-products-1.xml", $children, true));
+$all = [];
+$bad = [];
+foreach ($children as $child) {
+    [$st, $hs, $xml] = http_req($sm, parse_url($child, PHP_URL_PATH));
+    $d = @simplexml_load_string($xml);
+    if ($st !== 200 || !$d) { $bad[] = "$child ($st)"; continue; }
+    foreach ($d->xpath("//*[local-name()='loc']") as $loc) { $all[] = (string) $loc; }
+}
+check("every child sitemap is valid XML", $bad === []) || print("   " . implode(", ", $bad) . "\n");
+$brandCount = (int) query("SELECT COUNT(*) AS n FROM brand_v")[0]["n"];
+check("sitemaps list every brand", count(array_filter($all, function ($u) { return strpos($u, "/brand.php?brand=") !== false; })) === $brandCount);
+foreach ($all as $url) {
+    $u = parse_url($url);
+    [$st] = http_req($sm, $u["path"] . (isset($u["query"]) ? "?" . $u["query"] : ""));
+    if ($st !== 200) { $bad[] = "$url ($st)"; }
+}
+check("all " . count($all) . " sitemap URLs return 200", $bad === [] && count($all) > count(sitemap_static_paths()))
+    || print("   " . implode(", ", array_slice($bad, 0, 10)) . "\n");
+[$st] = http_req($sm, "/sitemap-products-2.xml");
+check("a product sitemap past the end is 404", $st === 404);
+[$st] = http_req($sm, "/sitemap-products-0.xml");
+check("product sitemap 0 is 404", $st === 404);
+
+section("HTTP: legal and trust pages");
+$lp = http_server();
+foreach (["/privacy.php" => "Privacy policy", "/terms.php" => "Disclaimer and terms of use",
+          "/corrections.php" => "Corrections", "/sources.php" => "Data sources and licences"] as $p => $h) {
+    [$st, $hs, $body] = http_req($lp, $p);
+    check("$p renders", $st === 200 && strpos($body, $h) !== false);
+    structureChecks($p, $body);
+}
+[$st, $hs, $body] = http_req($lp, "/privacy.php");
+check("privacy: placeholders when CONTROLLER_NAME and CONTACT_EMAIL are unset",
+    strpos($body, '[not set: CONTROLLER_NAME]') !== false && strpos($body, '[not set: CONTACT_EMAIL]') !== false);
+check("privacy: retention from MESSAGE_RETENTION_DAYS (default 180)", substr_count($body, "180 days") >= 2);
+check("privacy: cookie, Cloudflare, ICO and no analytics", strpos($body, "<strong>priorities</strong>") !== false
+    && strpos($body, "Cloudflare") !== false && strpos($body, "ico.org.uk") !== false && strpos($body, "no analytics") !== false);
+check("privacy: no advertising section while ads are off", strpos($body, "Advertising and cookies") === false);
+check("privacy: no Turnstile paragraph while it is off", strpos($body, "Turnstile") === false);
+[$st, $hs, $body] = http_req($lp, "/terms.php");
+check("terms: placeholder when CONTROLLER_NAME is unset", strpos($body, '[not set: CONTROLLER_NAME]') !== false);
+check("terms: not advice, no affiliation, trade marks, liability", strpos($body, "not endorsements") !== false
+    && strpos($body, "not affiliated") !== false && strpos($body, "Trade marks") !== false && strpos($body, "no liability") !== false);
+[$st, $hs, $body] = http_req($lp, "/sources.php");
+check("sources: ODbL, DbCL and OGL with links", strpos($body, "Contains data from Open Food Facts, available under the") !== false
+    && strpos($body, "opendatacommons.org/licenses/odbl/1-0/") !== false && strpos($body, "dbcl/1-0/") !== false
+    && strpos($body, "Open Government Licence v3.0") !== false);
+$named = http_server(["CONTROLLER_NAME" => 'Dale <b>Test</b> & Co', "CONTACT_EMAIL" => "privacy@example.com", "MESSAGE_RETENTION_DAYS" => "90"]);
+[$st, $hs, $body] = http_req($named, "/privacy.php");
+check("privacy: controller and email shown, escaped", strpos($body, "Dale &lt;b&gt;Test&lt;/b&gt; &amp; Co") !== false
+    && strpos($body, 'href="mailto:privacy@example.com"') !== false && strpos($body, "[not set") === false);
+check("privacy: retention follows MESSAGE_RETENTION_DAYS", strpos($body, "90 days") !== false && strpos($body, "180 days") === false);
+$ads = http_server(["ADS_ENABLED" => "1"]);
+[$st, $hs, $body] = http_req($ads, "/privacy.php");
+check("privacy: ADS_ENABLED brings in the marked advertising section", strpos($body, "Advertising and cookies") !== false
+    && strpos($body, "must be completed before ADS_ENABLED") !== false);
+foreach (["/", "/about.php", "/brand.php?brand=Valley+Fresh", "/nope", "/privacy.php"] as $p) {
+    [$st, $hs, $body] = http_req($lp, $p);
+    check("$p: footer links to privacy, terms, corrections and sources", strpos($body, 'href="/privacy.php"') !== false
+        && strpos($body, 'href="/terms.php"') !== false && strpos($body, 'href="/corrections.php"') !== false
+        && strpos($body, 'href="/sources.php"') !== false && strpos($body, "Product photos by Open Food Facts") !== false);
+}
+[$st, $hs, $body] = http_req($lp, "/brand.php?brand=Valley+Fresh");
+check("brand: report link pre-fills the contact form", strpos($body, 'href="/contact.php?about=brand&amp;item=Valley%20Fresh"') !== false);
+check("brand: recorded type with its category and a not-verified note", strpos($body, "Recorded type") !== false
+    && strpos($body, "not independently verified") !== false);
+check("brand: data freshness line", strpos($body, "Data last updated") !== false || strpos($body, "no dated source") !== false);
+check("report_problem_url encodes", report_problem_url("brand", 'A&B "x"') === "/contact.php?about=brand&item=A%26B%20%22x%22");
+check("newest_date picks the newest", newest_date(null, "2026-01-02 00:00:00", "2026-03-01", "") === "2026-03-01");
+check("long_date", long_date("2026-11-24 10:00:00") === "24 November 2026");
+
+section("HTTP: no error detail ever reaches a visitor");
+$dbg = http_server(["APP_DEBUG" => "1"]);
+[$st, $hs, $body] = http_req($dbg, "/__throw", ["headers" => ["Host" => "localhost:8000"]]);
+check("test hook works: APP_DEBUG=1 on localhost shows the detail", strpos($body, "SECRET-DETAIL") !== false);
+foreach (["/__throw", "/__fatal"] as $p) {
+    foreach (["ethicalbuy.net", "ethicalbuy.contelo.ai"] as $host) {
+        [$st, $hs, $body] = http_req($dbg, $p, ["headers" => ["Host" => $host]]);
+        check("$p with APP_DEBUG=1 on $host -> plain 500", $st === 500 && strpos($body, "Something went wrong") !== false);
+        check("$p on $host: no message, path, secret or partial page", strpos($body, "SECRET") === false
+            && strpos($body, "secret_detail") === false && strpos($body, __DIR__) === false
+            && strpos($body, dirname(__DIR__)) === false && strpos($body, "partial output") === false
+            && strpos($body, (string) getenv("DB_PASSWORD")) === false);
+    }
+}
+[$st, $hs, $body] = http_req($port, "/__throw", ["headers" => ["Host" => "localhost"]]);
+check("APP_DEBUG=0 on localhost -> plain 500 too", $st === 500 && strpos($body, "SECRET") === false && strpos($body, "partial output") === false);
+
+section("every POST form carries a CSRF token");
+foreach (array_merge(glob(__DIR__ . "/../templates/*.php"), glob(__DIR__ . "/../templates/admin/*.php")) as $tpl) {
+    $src = file_get_contents($tpl);
+    $forms = preg_match_all('~<form\b[^>]*method="post"~i', $src);
+    if ($forms === 0) { continue; }
+    check(basename(dirname($tpl)) . "/" . basename($tpl) . ": $forms POST form(s), each with csrf_field()",
+        substr_count($src, "csrf_field()") >= $forms);
+}
+foreach (glob(__DIR__ . "/../public/admin/*.php") as $page) {
+    $src = file_get_contents($page);
+    if (strpos($src, '"POST"') === false) { continue; }
+    check("admin/" . basename($page) . ": checks csrf_valid() on POST", strpos($src, "csrf_valid(") !== false);
+}
 
 echo $fails === 0 ? "\nALL PASS\n" : "\n$fails FAILURE(S)\n";
 exit($fails === 0 ? 0 : 1);

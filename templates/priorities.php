@@ -69,18 +69,4 @@
     array_map("weight_label", range(WEIGHT_MIN, WEIGHT_MAX))
 ) ?></script>
 
-<script>
-(function () {
-  // labels come from PHP so the wording cannot drift from weight_label()
-  const labels = JSON.parse(document.getElementById('weightLabels').textContent);
-
-  for (const slider of document.querySelectorAll('input[type=range][data-label]')) {
-    const badge = document.getElementById(slider.dataset.label);
-    if (!badge) continue;
-
-    slider.addEventListener('input', () => {
-      badge.textContent = labels[Number(slider.value)] ?? '';
-    });
-  }
-})();
-</script>
+<script src="<?= e(asset_url("/assets/priorities.js")) ?>"></script>

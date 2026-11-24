@@ -381,12 +381,15 @@ a:focus-visible, button:focus-visible, summary:focus-visible,
   background: #e4e2dd;
   overflow: hidden;
 }
-.score-bar > span { display: block; height: 100%; border-radius: inherit; background: var(--score-none-bar); }
-.score-bar--success   > span { background: var(--score-success-bar); }
-.score-bar--primary   > span { background: var(--score-primary-bar); }
-.score-bar--secondary > span { background: var(--score-secondary-bar); }
-.score-bar--warning   > span { background: var(--score-warning-bar); }
-.score-bar--danger    > span { background: var(--score-danger-bar); }
+/* the fill is an SVG rect sized by attribute, so no inline style is needed
+   under the Content-Security-Policy */
+.score-bar > svg { display: block; width: 100%; height: 100%; }
+.score-bar rect { fill: var(--score-none-bar); }
+.score-bar--success   rect { fill: var(--score-success-bar); }
+.score-bar--primary   rect { fill: var(--score-primary-bar); }
+.score-bar--secondary rect { fill: var(--score-secondary-bar); }
+.score-bar--warning   rect { fill: var(--score-warning-bar); }
+.score-bar--danger    rect { fill: var(--score-danger-bar); }
 
 /* whole-row and list tints that Bootstrap colours by rating band */
 .table-success   { --bs-table-bg: var(--score-success-tint);   --bs-table-color: var(--eb-text); --bs-table-border-color: var(--eb-border); }
@@ -628,6 +631,11 @@ details .list-group { margin-top: var(--eb-s3) !important; }
     linear-gradient(135deg, transparent 46%, var(--eb-tint-strong) 46%, var(--eb-tint-strong) 54%, transparent 54%),
     var(--eb-tint);
 }
+/* fixed sizes as classes rather than inline styles, for the CSP */
+.thumb--56  { width: 56px;  height: 56px; }
+.thumb--96  { width: 96px;  height: 96px; }
+.thumb--160 { width: 160px; height: 160px; }
+.admin-filter { max-width: 32rem; }
 .cell-with-thumb { display: flex; align-items: center; gap: var(--eb-s3); }
 .product-photo { display: flex; flex-direction: column; gap: var(--eb-s1); max-width: 160px; }
 .photo-credit { font-size: .75rem; color: var(--eb-muted); line-height: 1.3; }
@@ -672,4 +680,24 @@ details .list-group { margin-top: var(--eb-s3) !important; }
   .score { border: 1px solid #000000; }
   details > summary::before { display: none; }
   a { color: inherit; text-decoration: none; }
+}
+
+/* contact form honeypot: off screen, not display:none, so simple bots still fill it */
+.contact-trap {
+  position: absolute;
+  left: -10000px;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+}
+
+.site-footer__links { display: flex; flex-wrap: wrap; gap: .25rem 1rem; }
+
+/* a setting Dale must fill in before launch: impossible to miss */
+.config-missing {
+  background: var(--eb-tint-strong);
+  color: var(--eb-ink);
+  outline: 2px dashed currentColor;
+  font-weight: 700;
+  padding: 0 .25rem;
 }

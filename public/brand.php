@@ -3,11 +3,20 @@
 require_once(__DIR__ . "/../includes/config.php");
 require_once(__DIR__ . "/../includes/import.php");
 
+enforce_browse_limit();
+
 $name = input_string($_GET, "brand");
 
 if ($name === "")
 {
+    http_response_code(404);
     apologize("No brand was specified.");
+}
+
+// a name no brand could have is answered without touching the database
+if (mb_strlen($name) > BRAND_NAME_MAX || has_control_chars($name))
+{
+    show_error_page(404);
 }
 
 $brand = get_brand($name);
@@ -26,8 +35,8 @@ if ($brand === null)
 $weights = current_weights();
 
 // products table: optional name filter and page number
-$product_filter = input_string($_GET, "pq");
-$product_page = (int) input_string($_GET, "pp", "1");
+$product_filter = mb_substr(input_string($_GET, "pq"), 0, SEARCH_TERM_MAX);
+$product_page = page_number(input_string($_GET, "pp", "1"));
 
 // the reader's own rating, plus the per-dimension detail behind it
 $stored = get_brand_scores($brand["brand_id"]);
@@ -72,6 +81,12 @@ usort($alternatives, function ($a, $b) {
 
 render("brand.php", [
     "title" => $brand["brand"],
+    "canonical" => brand_path($brand["brand"]),
+    "description" => $brand["brand"]
+        . ($brand["owner"] ? ", owned by " . $brand["owner"] : "")
+        . ". Overall view " . rating_score($brand["rating"])
+        . ($brand["category"] ? ", in " . $brand["category"] : "")
+        . ". See how it scores on ownership, environment, nutrition and animal welfare.",
     "brand" => $brand,
     "alternatives" => $alternatives,
     "weights" => $weights,
@@ -86,6 +101,7 @@ render("brand.php", [
     "product_page" => $product_page,
     "product_pages" => $product_pages,
     "product_filter" => $product_filter,
+    "last_updated" => newest_date($brand["retrieved_at"] ?? null, brand_last_updated($brand["brand_id"])),
     "brand_image" => brand_images([$brand["brand_id"]])[(int) $brand["brand_id"]] ?? null,
     "alt_images" => brand_images(array_column($alternatives, "brand_id")),
 ]);

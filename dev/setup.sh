@@ -85,6 +85,9 @@ GRANT INSERT ON \`$DB_NAME\`.contact_messages TO '$DB_USER'@'localhost';
 GRANT INSERT ON \`$DB_NAME\`.message_log      TO '$DB_USER'@'localhost';
 GRANT INSERT ON \`$DB_NAME\`.jobs             TO '$DB_USER'@'localhost';
 
+-- rate limiting and the admin login throttle
+GRANT SELECT, INSERT, UPDATE, DELETE ON \`$DB_NAME\`.rate_limits TO '$DB_USER'@'localhost';
+
 -- admin CRUD
 GRANT SELECT                         ON \`$DB_NAME\`.categories TO '$DB_USER'@'localhost';
 GRANT SELECT                         ON \`$DB_NAME\`.owners     TO '$DB_USER'@'localhost';
@@ -109,6 +112,12 @@ GRANT SELECT, INSERT                 ON \`$DB_NAME\`.categories TO '$IMPORT_USER
 GRANT SELECT, INSERT, UPDATE         ON \`$DB_NAME\`.owners     TO '$IMPORT_USER'@'localhost';
 GRANT SELECT, INSERT, UPDATE, DELETE ON \`$DB_NAME\`.owner_company_candidates
                                                                TO '$IMPORT_USER'@'localhost';
+
+-- bin/purge-messages.php runs as the importer: it deletes old contact
+-- messages, log rows and rate limit counters, which the site cannot
+GRANT SELECT, DELETE ON \`$DB_NAME\`.contact_messages TO '$IMPORT_USER'@'localhost';
+GRANT SELECT, DELETE ON \`$DB_NAME\`.message_log      TO '$IMPORT_USER'@'localhost';
+GRANT SELECT, DELETE ON \`$DB_NAME\`.rate_limits      TO '$IMPORT_USER'@'localhost';
 FLUSH PRIVILEGES;
 SQL
 

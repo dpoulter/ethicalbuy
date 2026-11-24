@@ -2,6 +2,40 @@
 
 require_once(__DIR__ . "/../includes/config.php");
 
+// Caddy sends every missing path here; anything that is not a route has
+// already been answered with a 404 by enforce_known_path()
+$route = PHP_SAPI === "cli" ? "home" : front_controller_route(request_path());
+
+if ($route === "robots")
+{
+    header("Content-Type: text/plain; charset=UTF-8");
+    header("Cache-Control: public, max-age=3600");
+    echo robots_txt();
+    exit;
+}
+
+enforce_browse_limit();
+
+if ($route !== "home")
+{
+    $part = preg_match('#^/sitemap-products-(\d+)\.xml$#', request_path(), $m) ? (int) $m[1] : 1;
+    $xml = cached_sitemap($route, $part);
+
+    if ($xml === false)
+    {
+        show_error_page(503);
+    }
+    if ($xml === null)
+    {
+        show_error_page(404);
+    }
+
+    header("Content-Type: application/xml; charset=UTF-8");
+    header("Cache-Control: public, max-age=3600");
+    echo $xml;
+    exit;
+}
+
 $rows = get_categories();
 
 // handle failure before rendering anything, so apologize() owns the whole page
@@ -52,6 +86,7 @@ foreach ($rows as $row)
 
 render("category_form.php", [
     "title" => "Categories",
+    "canonical" => "/",
     "categories" => $categories,
     "chosen" => has_chosen_priorities(),
 ]);

@@ -45,6 +45,7 @@ const COVERAGE_LOW = 0.5;
 const DERIVATION_ROWS_SHOWN = 15;
 
 const PRIORITIES_COOKIE = "priorities";
+const PRIORITIES_COOKIE_MAX = 200;
 
 /**
  * The dimensions a brand can be scored on, in display order.
@@ -117,7 +118,9 @@ function parse_weights($raw)
 {
     $weights = default_weights();
 
-    if (!is_string($raw) || $raw === "")
+    // five small integers never need more than this; anything longer is
+    // not ours and is ignored rather than parsed
+    if (!is_string($raw) || $raw === "" || strlen($raw) > PRIORITIES_COOKIE_MAX)
     {
         return $weights;
     }
@@ -186,7 +189,8 @@ function save_weights($weights)
         "expires"  => time() + (86400 * 365),
         "path"     => "/",
         "secure"   => is_secure_request(),
-        "httponly" => false,
+        // no script reads it; the server scores every page
+        "httponly" => true,
         "samesite" => "Lax",
     ]);
 }
@@ -194,8 +198,11 @@ function save_weights($weights)
 function clear_weights()
 {
     setcookie(PRIORITIES_COOKIE, "", [
-        "expires" => time() - 3600,
-        "path"    => "/",
+        "expires"  => time() - 3600,
+        "path"     => "/",
+        "secure"   => is_secure_request(),
+        "httponly" => true,
+        "samesite" => "Lax",
     ]);
 }
 

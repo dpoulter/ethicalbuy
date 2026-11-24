@@ -140,22 +140,16 @@
 </p>
 
 <p>
-  Product facts come from Open Food Facts under the Open Database Licence
-  (ODbL). Product photos are by Open Food Facts contributors under the
-  Creative Commons Attribution-ShareAlike 4.0 licence (CC BY-SA 4.0); a
-  brand's photo is the photo of its most scanned product.
-</p>
-
-<p id="photos-privacy">
-  Product photos load directly from Open Food Facts' servers, not ours, so
-  Open Food Facts sees your IP address and browser details when a page with a
-  photo is shown. We send them no other information about you.
+  Product facts and photos come from Open Food Facts, and company details from
+  Companies House. Each source and its licence, including how product photos
+  are loaded, is listed on <a href="/sources.php">data sources and licences</a>.
+  What that means for your privacy is in the <a href="/privacy.php">privacy policy</a>.
 </p>
 
 <p>
   Ownership changes often, and a rating reflects what was known when it was
   written. If something here looks out of date or wrong, we'd genuinely like to
-  know &mdash; <a href="contact.php">tell us</a> and we'll look at it again.
+  know: see <a href="/corrections.php">corrections</a> and we'll look at it again.
 </p>
 
 <h4 class="mt-4">What this isn't</h4>

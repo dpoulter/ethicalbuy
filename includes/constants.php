@@ -33,14 +33,17 @@ function env($name, $default = null)
     return $value;
 }
 
+require_once(__DIR__ . "/request.php");
+
 // database connection
 define("DATABASE", env("DB_NAME", "ethicalbuy"));
 define("SERVER", env("DB_HOST", "localhost"));
 define("USERNAME", env("DB_USER", "ethicalbuy"));
 define("PASSWORD", env("DB_PASSWORD"));
 
-// site
-define("SITE_URL", env("SITE_URL", "https://ethicalbuy.duckdns.org"));
+// site, with no trailing slash; absolute URLs (canonical, sitemap) start here
+define("SITE_URL", rtrim(env("SITE_URL", "https://ethicalbuy.net"), "/"));
 
-// set to "1" only while developing locally
-define("DEBUG", env("APP_DEBUG", "0") === "1");
+// set to "1" only while developing locally. Forced off for any request whose
+// Host is not localhost, so a stray APP_DEBUG=1 cannot leak detail publicly.
+define("DEBUG", env("APP_DEBUG", "0") === "1" && is_local_host());

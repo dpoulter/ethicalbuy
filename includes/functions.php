@@ -37,6 +37,13 @@ function json_for_html($value)
  */
 function apologize($message)
 {
+    // the database being down is not something to apologise for page by
+    // page: show the maintenance page with a 503 instead
+    if (db_unavailable())
+    {
+        show_error_page(503);
+    }
+
     render("apology.php", ["title" => "Sorry", "message" => $message]);
     exit;
 }
@@ -120,7 +127,15 @@ function query(/* $sql [, ... ] */)
             // log the detail, tell the visitor nothing
             error_log("Database connection failed: " . $e->getMessage());
             $handle = null;
+            $GLOBALS["ETHICALBUY_DB_DOWN"] = true;
             return false;
+        }
+
+        // no single web request may run an unbounded query. The importers
+        // run from the command line and are exempt.
+        if (PHP_SAPI !== "cli")
+        {
+            set_statement_timeout($handle);
         }
     }
 
@@ -140,6 +155,37 @@ function query(/* $sql [, ... ] */)
         error_log("Query failed: " . $e->getMessage() . " -- SQL: " . $sql);
         return false;
     }
+}
+
+/**
+ * Caps how long any one statement may run for this connection, in seconds
+ * (DB_STATEMENT_TIMEOUT, default 5). MariaDB and MySQL spell this
+ * differently; whichever the server does not know is ignored.
+ */
+function set_statement_timeout(PDO $handle)
+{
+    $seconds = max(1, (int) env("DB_STATEMENT_TIMEOUT", "5"));
+
+    foreach (["SET SESSION max_statement_time = " . $seconds,
+              "SET SESSION max_execution_time = " . ($seconds * 1000)] as $sql)
+    {
+        try
+        {
+            $handle->exec($sql);
+        }
+        catch (PDOException $e)
+        {
+            // not this server's variable
+        }
+    }
+}
+
+/**
+ * True once a connection to the database has been tried and failed.
+ */
+function db_unavailable()
+{
+    return !empty($GLOBALS["ETHICALBUY_DB_DOWN"]);
 }
 
 /**
@@ -272,29 +318,6 @@ function rating_score($rating)
 }
 
 /**
- * True if this request arrived over TLS.
- *
- * X-Forwarded-Proto is only believed when TRUST_PROXY=1, because any client
- * can send that header when the app is reachable directly.
- */
-function is_secure_request()
-{
-    if (!empty($_SERVER["HTTPS"]) && strtolower($_SERVER["HTTPS"]) !== "off")
-    {
-        return true;
-    }
-
-    if (env("TRUST_PROXY", "0") === "1"
-        && strtolower($_SERVER["HTTP_X_FORWARDED_PROTO"] ?? "") === "https")
-    {
-        return true;
-    }
-
-    // local development over plain HTTP
-    return in_array($_SERVER["REMOTE_ADDR"] ?? "", ["127.0.0.1", "::1"], true);
-}
-
-/**
  * Reads the submitted Basic credentials as [user, password], or [null, null].
  *
  * Falls back to parsing the Authorization header, because under CGI/FastCGI
@@ -326,20 +349,61 @@ function basic_auth_credentials()
 }
 
 /**
+ * True if this request is for the admin area.
+ */
+function is_admin_request()
+{
+    $script = (string) ($_SERVER["SCRIPT_NAME"] ?? "");
+    $path = request_path();
+
+    return strpos($script, "/admin/") === 0 || $path === "/admin" || strpos($path, "/admin/") === 0;
+}
+
+/**
+ * When ADMIN_ALLOWED_HOSTS is set, /admin answers only on those host names.
+ * Anywhere else it is a plain 404, before any login prompt, so the public
+ * site does not even reveal that an admin area exists. Unset means no
+ * restriction, which keeps local development working.
+ */
+function enforce_admin_host()
+{
+    if (PHP_SAPI === "cli" || !is_admin_request())
+    {
+        return;
+    }
+
+    // admin pages are never cached by a browser or by Cloudflare
+    header("Cache-Control: no-store");
+
+    $allowed = env_list("ADMIN_ALLOWED_HOSTS");
+
+    if ($allowed && !in_array(request_host(), $allowed, true))
+    {
+        show_error_page(404);
+    }
+}
+
+/**
  * Gate for every admin page. Sends 401 and exits unless valid credentials
  * were supplied. Fails closed: if the app is misconfigured, nobody gets in.
  *
  * Credentials come from ADMIN_USER and ADMIN_PASSWORD_HASH, the latter being
  * a password_hash() digest so no plaintext password is ever stored.
+ *
+ * Failed attempts are counted per client IP. After ADMIN_AUTH_MAX_FAILURES
+ * (5) failures within ADMIN_AUTH_WINDOW_MINUTES (15), every admin request
+ * from that IP gets a 429 for ADMIN_AUTH_LOCK_MINUTES (15), right password
+ * or not. Neither the username nor the password tried is ever logged.
  */
 function require_admin()
 {
+    header("Cache-Control: no-store");
+
     // Basic credentials travel base64-encoded, which is not encryption
     if (!is_secure_request())
     {
         error_log("Refused admin access over plain HTTP");
-        http_response_code(403);
-        exit("Admin is only available over HTTPS.");
+        show_error_page(403, "The admin area is only available over HTTPS.");
     }
 
     $user = env("ADMIN_USER", "");
@@ -348,27 +412,80 @@ function require_admin()
     if ($user === "" || $hash === "")
     {
         error_log("Admin is not configured: set ADMIN_USER and ADMIN_PASSWORD_HASH");
-        http_response_code(500);
-        exit("Admin is not configured.");
+        show_error_page(500);
+    }
+
+    $lock_span = 60 * rate_setting("ADMIN_AUTH_LOCK_MINUTES", 15);
+    [$locked, $retry] = rate_count("admin_lock", $lock_span);
+    if ($locked > 0)
+    {
+        show_error_page(429, "Too many failed sign-in attempts. Please wait and try again later.", $retry);
     }
 
     [$given_user, $given_pass] = basic_auth_credentials();
 
-    $ok = is_string($given_user)
-        && hash_equals($user, $given_user)
-        && password_verify((string) $given_pass, $hash);
+    // both checks always run, so timing does not reveal which one failed
+    $user_ok = is_string($given_user) && hash_equals($user, $given_user);
+    $pass_ok = password_verify((string) $given_pass, $hash);
 
-    if (!$ok)
+    if ($user_ok && $pass_ok)
     {
-        if ($given_user !== null)
-        {
-            error_log("Failed admin login for user: " . $given_user);
-        }
-
-        header('WWW-Authenticate: Basic realm="Ethical Buy admin", charset="UTF-8"');
-        http_response_code(401);
-        exit("Authentication required.");
+        return;
     }
+
+    if ($given_user !== null)
+    {
+        $where = truncated_ip(client_ip());
+        error_log("Failed admin login from $where");
+        write_log("admin", "failed login from $where");
+
+        rate_hit("admin_fail");
+        [$failures] = rate_count("admin_fail", 60 * rate_setting("ADMIN_AUTH_WINDOW_MINUTES", 15));
+
+        if ($failures >= rate_setting("ADMIN_AUTH_MAX_FAILURES", 5))
+        {
+            rate_hit("admin_lock");
+            error_log("Admin login locked for $where after $failures failures");
+            write_log("admin", "login locked for $where after $failures failures");
+        }
+    }
+
+    header('WWW-Authenticate: Basic realm="Ethical Buy admin", charset="UTF-8"');
+    show_error_page(401);
+}
+
+// longest search term accepted; anything longer is cut to this
+const SEARCH_TERM_MAX = 100;
+
+// longest brand name the admin form accepts
+const BRAND_NAME_MAX = 150;
+
+// highest page number accepted from a query string
+const PAGE_MAX = 500;
+
+/**
+ * A page number from the query string: 1 to PAGE_MAX, anything else 1 or
+ * PAGE_MAX.
+ */
+function page_number($raw)
+{
+    $raw = trim((string) $raw);
+
+    if (!ctype_digit($raw) || strlen($raw) > 6)
+    {
+        return strlen($raw) > 6 && ctype_digit($raw) ? PAGE_MAX : 1;
+    }
+
+    return max(1, min(PAGE_MAX, (int) $raw));
+}
+
+/**
+ * True for something that could be a product code: an Open Food Facts code
+ * is a barcode, occasionally with letters, dots, dashes or underscores.
+ */
+function is_product_code($code)
+{
+    return is_string($code) && preg_match('/^[0-9A-Za-z._-]{1,100}$/', $code) === 1;
 }
 
 /**
@@ -387,6 +504,8 @@ function input_string(array $source, $key, $default = "")
  */
 function csrf_token()
 {
+    ensure_session();
+
     if (empty($_SESSION["csrf_token"]))
     {
         $_SESSION["csrf_token"] = bin2hex(random_bytes(32));
@@ -408,9 +527,26 @@ function csrf_field()
  */
 function csrf_valid($token)
 {
+    // only resume a session the visitor already has; never start one here
+    if (isset($_COOKIE[session_name()]))
+    {
+        ensure_session();
+    }
+
     return !empty($_SESSION["csrf_token"])
         && is_string($token)
         && hash_equals($_SESSION["csrf_token"], $token);
+}
+
+/**
+ * How long contact messages and log rows are kept, in days. Shown on the
+ * privacy page and used by bin/purge-messages.php, so the two cannot drift.
+ */
+function message_retention_days()
+{
+    $days = env("MESSAGE_RETENTION_DAYS", "180");
+
+    return ctype_digit($days) && (int) $days > 0 ? (int) $days : 180;
 }
 
 /**

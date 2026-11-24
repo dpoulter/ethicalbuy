@@ -1,11 +1,33 @@
+<?php
+  // page metadata. Pages may pass description, canonical (a site path),
+  // og_image (an absolute https URL) and noindex; everything has a default.
+  $page_title = isset($title) && $title !== "" ? $title . " | Ethical Buy" : "Ethical Buy";
+  $page_description = meta_description($description ?? DEFAULT_DESCRIPTION);
+  $page_canonical = absolute_url($canonical ?? (PHP_SAPI === "cli" ? "/" : request_path()));
+  $page_noindex = !site_indexable() || !empty($noindex);
+?>
 <!doctype html>
-<html lang="en">
+<html lang="en-GB">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
-  <title><?= isset($title) ? e($title) . " | Ethical Buy" : "Ethical Buy" ?></title>
-  <link href="/vendor/bootstrap/bootstrap.min.css" rel="stylesheet">
-  <link href="/assets/site.css" rel="stylesheet">
+  <title><?= e($page_title) ?></title>
+  <meta name="description" content="<?= e($page_description) ?>">
+  <?php if ($page_noindex): ?>
+    <meta name="robots" content="noindex, nofollow">
+  <?php endif ?>
+  <link rel="canonical" href="<?= e($page_canonical) ?>">
+  <meta property="og:site_name" content="Ethical Buy">
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="<?= e($title ?? "Ethical Buy") ?>">
+  <meta property="og:description" content="<?= e($page_description) ?>">
+  <meta property="og:url" content="<?= e($page_canonical) ?>">
+  <meta property="og:locale" content="en_GB">
+  <?php if (!empty($og_image) && is_product_image_url($og_image)): ?>
+    <meta property="og:image" content="<?= e($og_image) ?>">
+  <?php endif ?>
+  <link href="<?= e(asset_url("/vendor/bootstrap/bootstrap.min.css")) ?>" rel="stylesheet">
+  <link href="<?= e(asset_url("/assets/site.css")) ?>" rel="stylesheet">
 </head>
 <body>
 <?php

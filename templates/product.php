@@ -77,6 +77,16 @@
         Retrieved <?= e(date("j M Y", strtotime($product["product_retrieved_at"]))) ?>.
       <?php endif ?>
     </p>
+
+    <p class="small text-muted mb-0 mt-2 data-freshness">
+      <?php if (!empty($last_updated)): ?>
+        Data last updated <?= e(long_date($last_updated)) ?>.
+      <?php else: ?>
+        We have no dated source for this product yet.
+      <?php endif ?>
+      <a href="<?= e(report_problem_url("product", $product_name . " (" . $product["code"] . ")")) ?>">Report a problem with this product</a>
+      &middot; <a href="/sources.php">Data sources</a>
+    </p>
   </div>
 </div>
 

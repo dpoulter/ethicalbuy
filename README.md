@@ -12,13 +12,14 @@ public/       web root -- the only directory the web server should serve
   brand.php     single brand detail, with alternatives in the same category
   about.php     what the site is and how ratings work
   contact.php   contact form
+  privacy.php, terms.php, corrections.php, sources.php   legal and trust pages
   admin/        brand CRUD, behind HTTP Basic auth
   vendor/       vendored front-end libraries
 includes/     configuration and helpers (not web-accessible)
 templates/    page fragments rendered by render() (not web-accessible)
   partials/     small includes shared between templates
   admin/        admin screens
-bin/          command-line importers
+bin/          command-line importers, and purge-messages.php for retention
 migrations/   one-off SQL, applied by hand in filename order
 dev/          local development schema, seed data and setup script
 tests/        smoke.php -- run it before every deploy
@@ -39,14 +40,18 @@ closes it. Every other template is a **fragment**: it must not emit
 Secrets come from the environment, not from source. Copy `.env.example` and
 set the variables in your web server config, systemd unit, or shell:
 
-| Variable      | Required | Default                          | Notes                                        |
-| ------------- | -------- | -------------------------------- | -------------------------------------------- |
-| `DB_PASSWORD` | yes      | —                                | App exits with a 500 if unset                |
-| `DB_HOST`     | no       | `localhost`                      |                                              |
-| `DB_NAME`     | no       | `ethicalbuy`                     |                                              |
-| `DB_USER`     | no       | `ethicalbuy`                     |                                              |
-| `SITE_URL`    | no       | `https://ethicalbuy.duckdns.org` | Used to build redirects                      |
-| `APP_DEBUG`   | no       | `0`                              | `1` shows PHP errors. Never enable in prod   |
+| Variable      | Required | Default                  | Notes                                        |
+| ------------- | -------- | ------------------------ | -------------------------------------------- |
+| `DB_PASSWORD` | yes      | —                        | App exits with a 500 if unset                |
+| `DB_HOST`     | no       | `localhost`              |                                              |
+| `DB_NAME`     | no       | `ethicalbuy`             |                                              |
+| `DB_USER`     | no       | `ethicalbuy`             |                                              |
+| `SITE_URL`    | no       | `https://ethicalbuy.net` | Canonical links, Open Graph and sitemaps     |
+| `APP_DEBUG`   | no       | `0`                      | `1` shows PHP errors, on localhost only      |
+
+Every other setting (proxy trust, admin host restriction, rate limits,
+indexing, Turnstile, retention, the privacy policy's controller) is listed
+with its default in [docs/public-deployment.md](docs/public-deployment.md).
 
 With Apache and mod_php, for example:
 

@@ -11,7 +11,7 @@
 <?php endif ?>
 
 <form action="/admin/index.php" method="get" class="mb-3">
-  <div class="input-group col-md-6" style="max-width: 32rem;">
+  <div class="input-group col-md-6 admin-filter">
     <input class="form-control" type="text" name="q" placeholder="Filter by brand name"
            value="<?= e($search) ?>">
     <button class="btn btn-outline-primary" type="submit">Filter</button>
