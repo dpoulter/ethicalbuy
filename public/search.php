@@ -90,6 +90,10 @@ if ($submitted)
 
 render("search.php", [
     "title" => $submitted ? "Search Results" : "Search",
+    "description" => "Search Ethical Buy for a brand or product to see who owns it and how it scores.",
+    "canonical" => "/search.php",
+    // result pages are endless variations of one page
+    "noindex" => $submitted,
     "filters" => $filters,
     "submitted" => $submitted,
     "results" => $results,

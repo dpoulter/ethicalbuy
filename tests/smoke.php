@@ -26,6 +26,7 @@ $fails = 0;
 function check($label, $cond) {
     global $fails;
     if (!$cond) { $fails++; echo "FAIL: $label\n"; } else { echo "ok:   $label\n"; }
+    return (bool) $cond;
 }
 function section($name) { echo "\n-- $name --\n"; }
 
@@ -1847,6 +1848,75 @@ check("Turnstile on: CSP allows only Cloudflare's challenge host, for script and
     && strpos($csp, "frame-src https://challenges.cloudflare.com") !== false);
 check("Turnstile on: widget rendered", strpos($body, 'class="cf-turnstile') !== false);
 check("ads off by default: no extra CSP hosts", csp_ads_sources() === [] && !ads_enabled());
+
+section("HTTP: indexing switch, robots.txt, metadata");
+$pageTypes = ["/", "/search.php", "/brand.php?brand=Valley+Fresh", "/priorities.php", "/about.php", "/contact.php"];
+$soft = http_server(["SITE_URL" => "https://ethicalbuy.net"]);
+foreach ($pageTypes as $p) {
+    [$st, $hs, $body] = http_req($soft, $p);
+    check("SITE_INDEXABLE unset: $p has noindex header and meta", hdr($hs, "X-Robots-Tag") === "noindex, nofollow"
+        && strpos($body, '<meta name="robots" content="noindex, nofollow">') !== false);
+}
+[$st, $hs, $body] = http_req($soft, "/robots.txt");
+check("SITE_INDEXABLE unset: robots.txt disallows all", $st === 200 && strpos((string) hdr($hs, "Content-Type"), "text/plain") === 0
+    && preg_match('~^User-agent: \*\nDisallow: /\n$~m', $body) === 1 && strpos($body, "Sitemap:") === false);
+$live = http_server(["SITE_URL" => "https://ethicalbuy.net/", "SITE_INDEXABLE" => "1"]);
+foreach ($pageTypes as $p) {
+    [$st, $hs, $body] = http_req($live, $p);
+    check("SITE_INDEXABLE=1: $p is indexable", hdr($hs, "X-Robots-Tag") === null && strpos($body, 'name="robots"') === false);
+    check("$p: title, description, canonical, Open Graph", preg_match('~<title>[^<]+ \| Ethical Buy</title>|<title>Ethical Buy</title>~', $body) === 1
+        && preg_match('~<meta name="description" content="[^"]{20,}">~', $body) === 1
+        && preg_match('~<link rel="canonical" href="https://ethicalbuy\.net/[^"]*">~', $body) === 1
+        && strpos($body, '<meta property="og:title"') !== false && strpos($body, '<meta property="og:url" content="https://ethicalbuy.net/') !== false);
+}
+[$st, $hs, $body] = http_req($live, "/search.php?q=milk");
+check("SITE_INDEXABLE=1: search results still noindex", strpos($body, '<meta name="robots" content="noindex, nofollow">') !== false);
+[$st, $hs, $body] = http_req($live, "/brand.php?brand=Valley+Fresh&utm=x");
+check("brand canonical ignores stray parameters", strpos($body, '<link rel="canonical" href="https://ethicalbuy.net/brand.php?brand=Valley%20Fresh">') !== false);
+check("brand description built from the page", preg_match('~<meta name="description" content="Valley Fresh, owned by [^"]+">~', $body) === 1);
+[$st, $hs, $body] = http_req($live, "/nope");
+check("SITE_INDEXABLE=1: 404 page is still noindex", $st === 404 && hdr($hs, "X-Robots-Tag") === "noindex, nofollow");
+[$st, $hs, $body] = http_req($live, "/robots.txt");
+check("SITE_INDEXABLE=1: robots.txt allows crawling and names the sitemap", strpos($body, "Allow: /") !== false
+    && strpos($body, "Disallow: /\n") === false && strpos($body, "Sitemap: https://ethicalbuy.net/sitemap.xml") !== false);
+$evilTitle = renderTo("about.php", ["title" => '"><script>x</script>', "description" => '"><b>d</b>', "canonical" => '/a"b']);
+check("metadata escaped", strpos($evilTitle, '<script>x') === false && strpos($evilTitle, '"><b>') === false
+    && strpos($evilTitle, 'href="https://ethicalbuy.net/a&quot;b"') !== false);
+check("meta_description trims at a word", mb_strlen(meta_description(str_repeat("word ", 80))) <= 155
+    && substr(meta_description(str_repeat("word ", 80)), -3) === "...");
+
+section("HTTP: sitemaps");
+foreach (glob(sys_get_temp_dir() . "/ethicalbuy-*.xml") as $f) { @unlink($f); }
+$sm = http_server(["SITE_URL" => "http://localhost", "RATE_BROWSE_PER_MINUTE" => "100000"]);
+[$st, $hs, $body] = http_req($sm, "/sitemap.xml");
+check("sitemap.xml is a sitemap index", $st === 200 && strpos((string) hdr($hs, "Content-Type"), "application/xml") === 0
+    && strpos($body, "<sitemapindex") !== false && hdr($hs, "Cache-Control") === "public, max-age=3600");
+$doc = simplexml_load_string($body);
+$children = $doc ? array_map("strval", iterator_to_array($doc->xpath("//*[local-name()='loc']"), false)) : [];
+check("index lists pages, brands and products", in_array("http://localhost/sitemap-pages.xml", $children, true)
+    && in_array("http://localhost/sitemap-brands.xml", $children, true) && in_array("http://localhost/sitemap-products-1.xml", $children, true));
+$all = [];
+$bad = [];
+foreach ($children as $child) {
+    [$st, $hs, $xml] = http_req($sm, parse_url($child, PHP_URL_PATH));
+    $d = @simplexml_load_string($xml);
+    if ($st !== 200 || !$d) { $bad[] = "$child ($st)"; continue; }
+    foreach ($d->xpath("//*[local-name()='loc']") as $loc) { $all[] = (string) $loc; }
+}
+check("every child sitemap is valid XML", $bad === []) || print("   " . implode(", ", $bad) . "\n");
+$brandCount = (int) query("SELECT COUNT(*) AS n FROM brand_v")[0]["n"];
+check("sitemaps list every brand", count(array_filter($all, function ($u) { return strpos($u, "/brand.php?brand=") !== false; })) === $brandCount);
+foreach ($all as $url) {
+    $u = parse_url($url);
+    [$st] = http_req($sm, $u["path"] . (isset($u["query"]) ? "?" . $u["query"] : ""));
+    if ($st !== 200) { $bad[] = "$url ($st)"; }
+}
+check("all " . count($all) . " sitemap URLs return 200", $bad === [] && count($all) > count(sitemap_static_paths()))
+    || print("   " . implode(", ", array_slice($bad, 0, 10)) . "\n");
+[$st] = http_req($sm, "/sitemap-products-2.xml");
+check("a product sitemap past the end is 404", $st === 404);
+[$st] = http_req($sm, "/sitemap-products-0.xml");
+check("product sitemap 0 is 404", $st === 404);
 
 section("every POST form carries a CSRF token");
 foreach (array_merge(glob(__DIR__ . "/../templates/*.php"), glob(__DIR__ . "/../templates/admin/*.php")) as $tpl) {

@@ -142,6 +142,11 @@ function front_controller_route($path)
         return "sitemap-index";
     }
 
+    if ($path === "/sitemap-pages.xml")
+    {
+        return "sitemap-pages";
+    }
+
     if ($path === "/sitemap-brands.xml")
     {
         return "sitemap-brands";

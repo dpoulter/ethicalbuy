@@ -40,7 +40,13 @@ $brand_values = brand_score_values($product, $brand_stored);
 $product_scores = get_scores_for_products([$product["id"]])[(int) $product["id"]] ?? [];
 $values = product_score_values($product_scores, $brand_values);
 
+$product_title = $product["name"] !== null && $product["name"] !== "" ? $product["name"] : "Product " . $product["code"];
+
 render("product.php", [
+    "canonical" => product_path($product["code"]),
+    "description" => $product_title . " by " . $product["brand"]
+        . ". See how it scores on environment, nutrition, animal welfare and who owns the brand.",
+    "og_image" => $product["image_url"] ?? null,
     "title" => $product["name"] !== null && $product["name"] !== "" ? $product["name"] : "Product " . $product["code"],
     "product" => $product,
     "personal" => personal_score($values, $weights),

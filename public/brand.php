@@ -81,6 +81,12 @@ usort($alternatives, function ($a, $b) {
 
 render("brand.php", [
     "title" => $brand["brand"],
+    "canonical" => brand_path($brand["brand"]),
+    "description" => $brand["brand"]
+        . ($brand["owner"] ? ", owned by " . $brand["owner"] : "")
+        . ". Overall view " . rating_score($brand["rating"])
+        . ($brand["category"] ? ", in " . $brand["category"] : "")
+        . ". See how it scores on ownership, environment, nutrition and animal welfare.",
     "brand" => $brand,
     "alternatives" => $alternatives,
     "weights" => $weights,
