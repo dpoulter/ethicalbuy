@@ -1221,6 +1221,29 @@ $pValues = product_score_values(reset($pScores), $famValues);
 check("product: headline equals the working",
     preg_match('~score-calc-result">' . preg_quote(rating_score(personal_score($pValues, default_weights())["score"]), "~") . '<~', $html) === 1);
 
+// brand page products table: one Ownership column, the brand's score on every row
+$ownTable = function ($html) {
+    $t = substr($html, strpos($html, 'brand-products'));
+    return substr($t, 0, strpos($t, '</table>'));
+};
+$child([["fn" => "products", "brand" => "Own Test Family", "apply" => true, "complete" => true,
+         "mapped" => [$pp("660001", "Family Jam", "Own Test Family", ["own-test-family"], "c"),
+                      $pp("660002", "Family Marmalade", "Own Test Family", ["own-test-family"], "b")]]], $famId);
+[$st, $html] = runPage("brand.php", ["brand" => "Own Test Family"]);
+$tbl = $ownTable($html);
+$rows = preg_split('~<tr>~', substr($tbl, strpos($tbl, '<tbody>')));
+array_shift($rows);
+check("brand products: Ownership header", $st === 200 && preg_match('~<th>Welfare</th>\s*<th>Ownership</th>~', $tbl) === 1);
+check("brand products: one ownership badge per row", count($rows) === 2
+    && count(array_filter($rows, function ($r) { return substr_count($r, '<td') === 6 && strpos($r, '8/10') !== false; })) === 2);
+$mutId = (int) query("SELECT id FROM brands WHERE name = 'Own Test Mutual'")[0]["id"];
+$child([["fn" => "products", "brand" => "Own Test Mutual", "apply" => true, "complete" => true,
+         "mapped" => [$pp("660101", "Mutual Bread", "Own Test Mutual", ["own-test-mutual"], "a", "a", ["en:organic"])]]], $mutId);
+[$st, $html] = runPage("brand.php", ["brand" => "Own Test Mutual"]);
+$tbl = $ownTable($html);
+check("brand products: unscored ownership is Not assessed", $st === 200 && strpos($tbl, '<th>Ownership</th>') !== false
+    && preg_match('~</td>\s*<td>\s*<span class="score score--none score--sm"><span class="score__value score__value--text">Not assessed</span></span>\s*</td>\s*</tr>~', $tbl) === 1);
+
 // /admin: an unchanged form keeps the type-mapped source; a real edit makes it curated
 $multiId = (int) query("SELECT id FROM brands WHERE name = 'Own Test Multi'")[0]["id"];
 $form = [];

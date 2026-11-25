@@ -158,6 +158,7 @@
                 <th>Nutrition</th>
                 <th>Environment</th>
                 <th>Welfare</th>
+                <th>Ownership</th>
               </tr>
             </thead>
             <tbody>
@@ -176,6 +177,14 @@
                   <?php foreach (["nutrition", "environment", "welfare"] as $dim): ?>
                     <td><?php $dim_score = $prod["scores"][$dim] ?? null; require(TEMPLATE_DIR . "/partials/dimension_badge.php"); ?></td>
                   <?php endforeach ?>
+                  <td>
+                    <?php
+                      // ownership is the brand's, shared by all its products
+                      $own = $prod["values"]["ownership"] ?? null;
+                      $dim_score = $own === null ? null : ["score" => $own, "input" => null];
+                      require(TEMPLATE_DIR . "/partials/dimension_badge.php");
+                    ?>
+                  </td>
                 </tr>
               <?php endforeach ?>
             </tbody>
